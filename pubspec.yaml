@@ -1,0 +1,26 @@
+name: atlas_auth
+description: Official Flutter/Dart client SDK for Atlas — the client-facing auth core (FAPI) for a native app. Peer of the Swift and Kotlin SDKs.
+version: 0.1.0
+homepage: https://atlasauth.net
+repository: https://github.com/atlas/atlas
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # HTTP transport. The client is built around a single injectable http.Client
+  # so tests can drop in package:http/testing.dart's MockClient.
+  http: ^1.2.0
+  # Secure, OS-backed persistence for the session (Keychain on iOS, the
+  # EncryptedSharedPreferences-backed Keystore on Android).
+  flutter_secure_storage: ^9.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  # package:http ships MockClient under package:http/testing.dart — no extra dep.
+  flutter_lints: ^4.0.0
