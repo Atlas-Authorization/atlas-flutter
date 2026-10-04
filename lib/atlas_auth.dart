@@ -20,5 +20,6 @@ library atlas_auth;
 export 'src/atlas_client.dart';
 export 'src/atlas_exception.dart';
 export 'src/models.dart';
+export 'src/native_session.dart';
 export 'src/token_store.dart';
 export 'src/secure_token_store.dart';

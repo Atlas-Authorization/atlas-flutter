@@ -96,6 +96,16 @@ Models (immutable, with `fromJson` / `toJson`): `SignInAttempt`,
 `AtlasSession`. Customer metadata (`public_metadata`, `unsafe_metadata`) is a
 plain `Map<String, dynamic>`.
 
+**Native session (first-party OAuth, cookie-free)** — new in **0.2.0**
+(`native_session.dart`). A first-party app trades an OAuth access token it holds
+for a real Atlas session and carries it as a bearer: `exchangeForSession(...)`
+(RFC 8693 token-exchange on `POST /oauth2/token`), `refreshNativeSession(...)`
+(cookie-free rotate on `POST /v1/client/sessions/:id/tokens`), and
+`NativeSessionManager`, which hands out a fresh bearer via `token()` /
+`authHeaders()` (lazy, single-flight refresh ~10s before expiry) and persists
+each rotated refresh token to the `TokenStore`. Both helpers **fail soft**,
+returning `null` on any error — the caller's cue to re-run OAuth.
+
 Errors: every failure is an `AtlasException` — `kind` (`api` / `transport` /
 `decoding` / `notSignedIn`), `status` (HTTP status for API errors), `code` (the
 first server error code), `message`, and the raw `errors` list of

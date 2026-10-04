@@ -1,0 +1,7 @@
+# Dart/Flutter build + tool artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+# A library package pins versions via pubspec.yaml, not a committed lockfile.
+pubspec.lock

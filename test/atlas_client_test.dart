@@ -293,7 +293,7 @@ void main() {
   });
 
   test('hasSession reflects the store', () async {
-    final store = InMemoryTokenStore();
+    final TokenStore store = InMemoryTokenStore();
     final client = makeClient(store: store);
     expect(await client.hasSession(), isFalse);
     await store.save(
@@ -305,7 +305,7 @@ void main() {
   // MARK: token store + model round-trips
 
   test('InMemoryTokenStore round-trips', () async {
-    final store = InMemoryTokenStore();
+    final TokenStore store = InMemoryTokenStore();
     expect(await store.load(), isNull);
 
     const session = AtlasSession(sessionId: 'sess_1', token: 'jwt', refreshToken: 'rt');
