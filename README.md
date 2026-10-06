@@ -77,6 +77,67 @@ await client.exchangeTicket(attemptId: attemptId, ticket: ticket);
 final user = await client.currentUser();
 ```
 
+### Passkeys (native WebAuthn) — new in **0.3.0**
+
+The SDK bundles native passkeys. It drives the platform authenticator — Face ID
+/ Touch ID on iOS, the biometric / screen-lock prompt via Credential Manager on
+Android — through the [`passkeys`](https://pub.dev/packages/passkeys) plugin,
+and owns the two FAPI calls and the body mapping between them. The ceremony's
+`rpId` and `challenge` always come from the server's `begin` response; nothing
+is hardcoded.
+
+```dart
+// Register a passkey for the already-signed-in user. `name` is the human label
+// shown in the device's passkey list. Returns the new Passkey.
+final passkey = await client.registerPasskey(name: 'My iPhone');
+
+// Sign in with a passkey — no password. Runs the ceremony, exchanges the
+// completion ticket for a session, persists it, and returns the user.
+final user = await client.signInWithPasskey();
+```
+
+Server failures surface as `AtlasException`, exactly like the other flows. The
+ceremony layer surfaces the plugin's own typed exceptions, so your UI can tell a
+deliberate cancel from a missing credential:
+
+```dart
+try {
+  await client.signInWithPasskey();
+} on PasskeyAuthCancelledException {
+  // The user dismissed the system sheet — not an error to shout about.
+} on NoCredentialsAvailableException {
+  // No passkey on this device; offer password / OAuth instead.
+} on AtlasException catch (e) {
+  showError(e.message); // a begin/finish/exchange failure
+}
+```
+
+Inject your own authenticator (e.g. a fake in tests) via the
+`passkeyAuthenticator` constructor argument; by default one backed by the
+`passkeys` plugin is created lazily on first use, so a password-only app never
+touches the native authenticator.
+
+#### Setup the app project must do
+
+Passkeys are bound to your instance's Frontend API host, so the OS needs to see
+that your app is allowed to use credentials for that host. You configure the app
+side; **Atlas serves the matching well-known files on the Frontend API host for
+you, per instance — you do not self-host them.**
+
+- **iOS / macOS**: add an **Associated Domains** entitlement with
+  `webcredentials:<frontend-api-host>` (e.g.
+  `webcredentials:fapi.acme.atlasauth.net`). Atlas serves the matching
+  `/.well-known/apple-app-site-association` on that host automatically.
+- **Android**: register your app's **Digital Asset Links** — your package name
+  and your signing-certificate SHA-256 fingerprint(s) (both your upload/debug
+  and Play App Signing certs). Atlas serves the matching
+  `/.well-known/assetlinks.json` on the Frontend API host automatically; you
+  only declare the association on the app side.
+
+The `passkeys` plugin requires Android `minSdkVersion 28`, a device signed in to
+a Google account, and iOS 15+. See its
+[setup guide](https://pub.dev/packages/passkeys) for the per-platform details.
+
 ## API surface
 
 `AtlasClient` (all methods return `Future`s):
@@ -86,6 +147,8 @@ final user = await client.currentUser();
 | `signIn({email, password})` | `POST /v1/client/sign_ins` → `…/attempt_first_factor` → `…/tickets/exchange` | Full password sign-in; returns the `AtlasUser`. |
 | `exchangeTicket({attemptId, ticket})` | `POST /v1/client/tickets/exchange` | Turn a one-time ticket (or OAuth callback) into a session. |
 | `oauthAuthorizeUrl({provider, redirectUri})` | `POST /v1/client/sign_ins/oauth` | Build the provider authorize `Uri`. |
+| `registerPasskey({name})` | `POST /v1/client/me/passkeys/begin` → `…/finish` | Register a passkey for the signed-in user; returns the new `Passkey`. |
+| `signInWithPasskey()` | `POST /v1/client/sign_ins/passkey/begin` → `…/finish` → `…/tickets/exchange` | Sign in with a passkey; returns the `AtlasUser`. |
 | `currentUser()` | `GET /v1/client/me` | The signed-in user. |
 | `refresh()` | `POST /v1/client/sessions/:id/tokens` | Rotate the token; returns the updated `AtlasSession`. |
 | `signOut()` | `POST /v1/client/sessions/:id/revoke` | Revoke server-side and clear local storage. |
@@ -143,9 +206,10 @@ Provide your own by implementing the `TokenStore` interface (`save` / `load` /
 ## Scope
 
 The client is intentionally thin, matching the Swift/Kotlin peers. It does not
-drive multi-step MFA UI, own a cookie jar, or bundle passkeys — a non-complete
-sign-in surfaces its `status` as an `AtlasException` so your UI can take over.
-What it does, it does to the letter of the server contract.
+drive multi-step MFA UI or own a cookie jar — a non-complete sign-in surfaces
+its `status` as an `AtlasException` so your UI can take over. It does bundle
+native passkeys (see above). What it does, it does to the letter of the server
+contract.
 
 ## Testing
 

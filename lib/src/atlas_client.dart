@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'atlas_exception.dart';
 import 'models.dart';
+import 'passkeys.dart';
 import 'secure_token_store.dart';
 import 'token_store.dart';
 
@@ -24,9 +25,11 @@ class _Cookie {
 /// re-presented so the SDK can call `me` and rotate the token without the app
 /// ever handling it.
 ///
-/// The client is intentionally thin. It does not drive multi-step MFA UI, own a
-/// cookie jar, or bundle passkeys — see the README's scope note. What it does,
-/// it does to the letter of the server contract.
+/// The client is intentionally thin. It does not drive multi-step MFA UI or own
+/// a cookie jar — see the README's scope note. It does bundle native passkeys
+/// ([registerPasskey] / [signInWithPasskey]), driving the platform WebAuthn
+/// ceremony through the `passkeys` plugin. What it does, it does to the letter
+/// of the server contract.
 ///
 /// A client SDK authenticates with a **publishable key** (`pk_...`) and a
 /// session token — never the secret key. Passing an `sk_...` key is a
@@ -40,15 +43,22 @@ class AtlasClient {
   ///   [SecureTokenStore] namespaced by the publishable key.
   /// - [httpClient]: injectable for tests (a `package:http/testing.dart`
   ///   `MockClient`); defaults to a standard [http.Client].
+  /// - [passkeyAuthenticator]: the platform WebAuthn ceremony driver used by
+  ///   [registerPasskey] / [signInWithPasskey]. Defaults, lazily on first use,
+  ///   to a [CorbadoPasskeyAuthenticator] backed by the `passkeys` plugin, so a
+  ///   password-only app never touches the native authenticator. Inject a fake
+  ///   in tests.
   AtlasClient({
     required this.publishableKey,
     required String frontendApi,
     TokenStore? tokenStore,
     http.Client? httpClient,
+    AtlasPasskeyAuthenticator? passkeyAuthenticator,
   })  : assert(publishableKey.isNotEmpty, 'publishableKey must not be empty'),
         baseUrl = resolveBaseUrl(frontendApi),
         tokenStore = tokenStore ?? SecureTokenStore(account: publishableKey),
-        _http = httpClient ?? http.Client() {
+        _http = httpClient ?? http.Client(),
+        _passkeyAuthenticator = passkeyAuthenticator {
     if (publishableKey.startsWith('sk_')) {
       // A client SDK must never hold the secret key. Fail loudly rather than
       // ship it to the frontend API.
@@ -67,6 +77,12 @@ class AtlasClient {
   final String baseUrl;
   final TokenStore tokenStore;
   final http.Client _http;
+
+  /// The passkey ceremony driver. Null until first use, then the default
+  /// plugin-backed authenticator is created lazily (unless one was injected).
+  AtlasPasskeyAuthenticator? _passkeyAuthenticator;
+  AtlasPasskeyAuthenticator get _passkeys =>
+      _passkeyAuthenticator ??= CorbadoPasskeyAuthenticator();
 
   /// Normalize a FAPI host/origin into a base URL: a bare host is upgraded to
   /// `https://`, and a trailing slash is trimmed so it does not double up
@@ -173,6 +189,107 @@ class AtlasClient {
           'The server returned no authorization_url.');
     }
     return uri;
+  }
+
+  // MARK: - Passkeys (WebAuthn)
+
+  /// Register a passkey for the signed-in user, end to end:
+  /// 1. `POST /v1/client/me/passkeys/begin` to get the WebAuthn creation
+  ///    options (`rpId`, `challenge`, `user`, …),
+  /// 2. run the platform ceremony with those options — the device creates the
+  ///    credential (Face ID / Touch ID / screen lock),
+  /// 3. `POST /v1/client/me/passkeys/finish` with the attestation to store it.
+  ///
+  /// This is an authenticated (`/me/*`) call: it presents the stored session
+  /// and throws [AtlasException] of kind [AtlasErrorKind.notSignedIn] when there
+  /// is no session. [name] is an optional human label shown in the user's
+  /// device list. Returns the newly registered [Passkey].
+  ///
+  /// The `rpId` and `challenge` are taken from the `begin` response — never
+  /// hardcoded. Server failures surface as [AtlasException]; a ceremony the user
+  /// cancels or that finds no authenticator surfaces as the plugin's own typed
+  /// exception (e.g. `PasskeyAuthCancelledException`).
+  Future<Passkey> registerPasskey({String? name}) async {
+    final stored = await tokenStore.load();
+    if (stored == null) throw AtlasException.notSignedIn();
+
+    final beginResponse = await _send(
+      'POST',
+      '/v1/client/me/passkeys/begin',
+      body: const <String, String>{},
+      cookie: _cookieHeader(stored),
+    );
+    _throwIfError(beginResponse);
+    final begin = _decode(beginResponse);
+
+    final credential =
+        await _passkeys.register(RegisterRequestType.fromJson(begin));
+    final body = passkeyRegistrationFinishBody(begin, credential, name: name);
+
+    final finishResponse = await _send(
+      'POST',
+      '/v1/client/me/passkeys/finish',
+      body: body,
+      cookie: _cookieHeader(stored),
+    );
+    _throwIfError(finishResponse);
+    return Passkey.fromJson(_decode(finishResponse));
+  }
+
+  /// Sign in with a passkey, end to end:
+  /// 1. `POST /v1/client/sign_ins/passkey/begin` (publishable key only) to get
+  ///    the WebAuthn request options (`rpId`, `challenge`, `allowCredentials`),
+  /// 2. run the platform ceremony — the device asserts an existing credential,
+  /// 3. `POST /v1/client/sign_ins/passkey/finish` with the assertion, which
+  ///    mints the session DIRECTLY and returns the signed-in user.
+  ///
+  /// Unlike password [signIn], passkey finish does NOT go through a ticket
+  /// exchange — a verified passkey is two factors in one gesture, so the finish
+  /// response carries the completed attempt with its `jwt` + `created_session_id`
+  /// and a refresh token in a `Set-Cookie`. A non-complete status (e.g. a further
+  /// factor is owed) surfaces as an [AtlasException] carrying the status. The
+  /// `rpId` and `challenge` are taken from the `begin` response. A ceremony the
+  /// user cancels or with no credential available surfaces as the plugin's own
+  /// typed exception.
+  Future<AtlasUser> signInWithPasskey() async {
+    final begin = await _postJson(
+      '/v1/client/sign_ins/passkey/begin',
+      const <String, String>{},
+    );
+
+    final assertion =
+        await _passkeys.authenticate(AuthenticateRequestType.fromJson(begin));
+    final body = passkeyAssertionFinishBody(begin, assertion);
+
+    final response =
+        await _send('POST', '/v1/client/sign_ins/passkey/finish', body: body);
+    _throwIfError(response);
+    final decoded = _decode(response);
+
+    final attempt = SignInAttempt.fromJson(decoded);
+    if (!attempt.isComplete) {
+      throw AtlasException.api(
+        status: 200,
+        errors: [
+          AtlasErrorItem(
+            code: 'sign_in_not_complete',
+            message: 'Sign-in needs an additional step: ${attempt.status}.',
+          ),
+        ],
+      );
+    }
+
+    // Persist the session straight from the finish response: the completed
+    // attempt carries `jwt` + `created_session_id`, and the refresh token comes
+    // as a Set-Cookie (no ticket exchange for passkeys).
+    final tokens = SessionTokens.fromJson(decoded);
+    final refresh = _extractCookie(_Cookie.refresh, response);
+    await tokenStore.save(AtlasSession(
+      sessionId: attempt.createdSessionId ?? tokens.resolvedSessionId ?? '',
+      token: tokens.jwt,
+      refreshToken: refresh,
+    ));
+    return currentUser();
   }
 
   /// The signed-in user (`GET /v1/client/me`). Presents the stored refresh
