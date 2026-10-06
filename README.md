@@ -1,5 +1,7 @@
 # atlas_auth
 
+[![pub package](https://img.shields.io/pub/v/atlas_auth.svg)](https://pub.dev/packages/atlas_auth)
+
 The official **Flutter / Dart** client SDK for [Atlas](https://atlasauth.net) — a
 Clerk/Auth0-class authentication platform. It is the cross-platform mobile peer
 of the Atlas **Swift** and **Kotlin** SDKs and mirrors their surface
@@ -19,7 +21,7 @@ or add it to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  atlas_auth: ^0.1.0
+  atlas_auth: ^0.4.0
 ```
 
 ## Quickstart
@@ -138,6 +140,160 @@ The `passkeys` plugin requires Android `minSdkVersion 28`, a device signed in to
 a Google account, and iOS 15+. See its
 [setup guide](https://pub.dev/packages/passkeys) for the per-platform details.
 
+## Multi-step sign-in / sign-up — new in **0.4.0**
+
+For anything past a plain password — a verification code, a second factor, an
+MFA enrollment the policy now requires — drive the flow with a state machine
+instead of the one-shot `signIn`. The server decides each step; you read
+`status` / `nextStep` and submit what it asks for (§5). On `complete` the flow
+persists the session through the same `TokenStore`, so the rest of the app (and
+`currentUser()`) sees the signed-in user immediately.
+
+```dart
+final flow = client.createSignIn();
+
+await flow.start('ada@example.com');
+
+switch (flow.nextStep) {
+  case CollectFirstFactor(strategies: final s) when s.contains('password'):
+    await flow.attemptPassword('hunter2');
+  case CollectFirstFactor():
+    await flow.prepareFirstFactor(strategy: 'email_code'); // then attemptEmailCode(...)
+  default:
+    break;
+}
+
+// A second factor owed? TOTP, an SMS OTP, or a backup code all go here:
+if (flow.status == FlowStatus.needsSecondFactor) {
+  // optional: text an SMS code / start a push / fetch passkey options first
+  await flow.prepareSecondFactor(strategy: 'sms');
+  await flow.attemptTotp('123456', rememberDevice: true);
+}
+
+// Policy requires enrollment (needs_mfa_enrollment)?
+if (flow.status == FlowStatus.needsMfaEnrollment) {
+  final enrollment = await flow.prepareMfaEnrollment(); // show enrollment.uri / .secret
+  await flow.attemptMfaEnrollment(factorId: enrollment.factorId, codes: ['111222']);
+  print(flow.backupCodes); // shown once
+}
+
+if (flow.isComplete) {
+  final user = await client.currentUser(); // session already persisted
+}
+```
+
+`nextStep` is an exhaustive, sealed `FlowStep` (`CollectIdentifier`,
+`CollectFirstFactor`, `CollectSecondFactor`, `EnrollSecondFactor`,
+`CollectEmailCode`, `CollectNewPassword`, `CollectCaptcha`, `AwaitOauth`,
+`FlowDone`, `FlowRestart`, `FlowUnknown`) — a status this SDK version does not
+know maps to `FlowUnknown`, never a blank screen. Any bad step throws
+`AtlasException`, exactly like the one-shot methods.
+
+**Sign-up** (`createSignUp()`) and **password reset** (`createPasswordReset()`)
+are the same shape:
+
+```dart
+final signUp = client.createSignUp();
+await signUp.create(email: 'new@example.com', password: 'hunter2longer');
+await signUp.attemptVerification('424242'); // emailed code → complete → session persisted
+
+final reset = client.createPasswordReset();
+await reset.request('ada@example.com');
+await reset.attemptVerification('000111');
+// await reset.attemptSecondFactor('123456'); // only if the account has MFA
+await reset.setNewPassword('brandnewpass9'); // persists a session when sign-in-after-reset is on
+```
+
+## Prebuilt widgets — new in **0.4.0**
+
+Pure Flutter/Material widgets that drive the flow and bind to observable auth
+state — no extra native plugin beyond what the SDK already needs.
+
+- **`AtlasSignIn`** (alias `SignInView`) — a self-driving sign-in form:
+  identifier → first factor (password / email code) → second factor (TOTP / SMS
+  / backup code) → MFA enrollment → done, advancing a `SignInFlow` as the user
+  submits.
+- **`AtlasUserButton`** (alias `UserButton`) — the signed-in user's avatar/name
+  with a sign-out (and optional "Manage account") menu.
+- **`AtlasAuthState`** — a `ChangeNotifier` (and `ValueListenable` via
+  `userListenable`) exposing `user`, `loading`, `error`, `isSignedIn`. Bind any
+  widget to it with `ListenableBuilder` / `AnimatedBuilder` / `provider`.
+
+```dart
+final auth = AtlasAuthState(client)..load(); // rehydrate any persisted session
+
+// In a build method:
+AtlasSignIn(
+  client: client,
+  session: auth, // updated on completion
+  onComplete: (user) => Navigator.pop(context),
+);
+
+AtlasUserButton(session: auth, onSignedOut: () => print('bye'));
+```
+
+Styling follows the ambient `Theme`; wrap the widget in your own `Theme` to
+brand it.
+
+## Native id_token sign-in — new in **0.4.0**
+
+Exchange a provider **id_token** (Google GSI / One-Tap, Apple, Facebook Limited
+Login) for a session, no redirect:
+
+```dart
+// Optional but recommended: a replay-binding nonce the provider embeds.
+final nonce = await client.mintIdTokenNonce('google');
+
+// Obtain the id_token from the platform SDK — this is bring-your-own-token, so
+// the Atlas SDK pulls in no heavy native dependency of its own:
+//   • Google: `google_sign_in` → GoogleSignInAuthentication.idToken
+//             (configure the GSI client with `nonce`)
+//   • Apple:  `sign_in_with_apple` → credential.identityToken (pass `nonce`)
+final user = await client.signInWithIdToken(
+  provider: 'google',
+  idToken: theIdTokenFromTheProviderSdk,
+  nonce: nonce,
+);
+```
+
+On `complete` the one-time ticket is exchanged and the session persisted. A
+non-complete response (e.g. a second factor is still owed) throws
+`AtlasException` with the status — hand off to `createSignIn()` to resolve it.
+
+## Organizations, sessions & profile — new in **0.4.0**
+
+Authenticated `/me`, organization, and session surfaces, each a typed method +
+model. All present the stored session automatically and throw
+`AtlasException(kind: notSignedIn)` when there is none.
+
+```dart
+// Organizations (§8 / §9.2)
+final memberships = await client.listOrganizationMemberships();   // List<OrganizationMembership>
+final org = await client.createOrganization(name: 'Acme', slug: 'acme');
+await client.updateOrganization(org.id, name: 'Acme Inc', publicMetadata: {'tier': 'pro'});
+
+// Sessions / devices (§10.2)
+final devices = await client.listSessions();                      // List<SessionDevice>, .current flags this one
+await client.revokeSession(otherDevice.id);                       // revoking THIS session clears local storage
+final n = await client.revokeOtherSessions();                     // "sign out of every other device"
+
+// /me mutations
+await client.updateProfile(firstName: 'Ada', unsafeMetadata: {'theme': 'dark'});
+final email = await client.addEmailAddress('ada+new@example.com');
+await client.verifyEmailAddress(id: email.id, code: '112233');
+await client.setPrimaryEmailAddress(email.id);
+await client.deleteEmailAddress(oldEmailId);
+final connect = await client.connectExternalAccount(provider: 'github', redirectUrl: 'myapp://cb');
+// open connect.authorizationUrl in a browser; the callback returns __atlas_status=connected
+await client.disconnectExternalAccount(externalAccountId);
+await client.changePassword(currentPassword: 'old', newPassword: 'new-one-9'); // revokes other sessions
+await client.setPassword('first-pass-9');                         // OAuth-only / guest: set a first password
+```
+
+Only `unsafe_metadata` is client-writable on a user; `public_metadata` /
+`private_metadata` are rejected by the server (an organization's
+`public_metadata` is admin-writable via `updateOrganization`).
+
 ## API surface
 
 `AtlasClient` (all methods return `Future`s):
@@ -154,10 +310,17 @@ a Google account, and iOS 15+. See its
 | `signOut()` | `POST /v1/client/sessions/:id/revoke` | Revoke server-side and clear local storage. |
 | `hasSession()` | — | Offline check for a persisted session. |
 
+Beyond the one-shot methods above, `AtlasClient` also exposes the multi-step
+flow factories (`createSignIn` / `createSignUp` / `createPasswordReset`), native
+id_token sign-in (`signInWithIdToken` / `mintIdTokenNonce`), and the
+organization / session / `me`-mutation methods documented in the sections above.
+
 Models (immutable, with `fromJson` / `toJson`): `SignInAttempt`,
 `SessionTokens`, `AtlasUser`, `EmailAddress`, `ExternalAccount`, `Passkey`,
-`AtlasSession`. Customer metadata (`public_metadata`, `unsafe_metadata`) is a
-plain `Map<String, dynamic>`.
+`AtlasSession`, `Organization`, `OrganizationMembership`, `SessionDevice`,
+`ExternalAccountConnection`, `MfaEnrollment`, `SecondFactorPreparation`.
+Customer metadata (`public_metadata`, `unsafe_metadata`) is a plain
+`Map<String, dynamic>`.
 
 **Native session (first-party OAuth, cookie-free)** — new in **0.2.0**
 (`native_session.dart`). A first-party app trades an OAuth access token it holds
@@ -205,11 +368,23 @@ Provide your own by implementing the `TokenStore` interface (`save` / `load` /
 
 ## Scope
 
-The client is intentionally thin, matching the Swift/Kotlin peers. It does not
-drive multi-step MFA UI or own a cookie jar — a non-complete sign-in surfaces
-its `status` as an `AtlasException` so your UI can take over. It does bundle
-native passkeys (see above). What it does, it does to the letter of the server
-contract.
+The SDK is a complete client for the Atlas Frontend API. It drives the full
+multi-step sign-in / sign-up / password-reset flows — password, email and phone
+codes, second factors (TOTP / SMS / backup / push), and mid-sign-in MFA
+enrollment — through a server-authoritative state machine, and ships prebuilt
+Flutter widgets (`AtlasSignIn`, `AtlasUserButton`, `AtlasAuthState`) that render
+and advance those flows for you. It also covers native id_token (One-Tap /
+Apple) sign-in, native passkeys, organizations, session/device management, and
+the `/me` profile, email, external-account and password mutations. The session
+(cookie-based and native bearer) is managed for you. What it does, it does to
+the letter of the server contract; a status this SDK version does not yet model
+surfaces as `FlowUnknown` rather than a blank screen.
+
+What it deliberately leaves to the app: opening the system browser for an OAuth
+redirect and catching the deep-link callback (hand the params to
+`exchangeTicket`), obtaining a provider id_token from the platform SDK for
+`signInWithIdToken` (bring-your-own-token, so no heavy native dependency is
+bundled), and solving a CAPTCHA challenge in your own captcha widget.
 
 ## Testing
 
