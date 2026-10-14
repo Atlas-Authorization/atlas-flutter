@@ -42,6 +42,39 @@ class AtlasErrorItem {
   String toString() => 'AtlasErrorItem($code: $message${param == null ? '' : ' [$param]'})';
 }
 
+/// Server error codes the SDK names. [wire] is the code on the wire;
+/// [AtlasException.code] still carries every code, known or not.
+enum AtlasErrorCode {
+  /// 422 — a flow would send an email (code, link, reset, verification) but the
+  /// app has no way to deliver it. Refused before anything is issued, so a form
+  /// never says "we sent you a code" when nothing will arrive.
+  emailDeliveryNotConfigured('EMAIL_DELIVERY_NOT_CONFIGURED'),
+  validationFailed('VALIDATION_FAILED'),
+  rateLimited('RATE_LIMITED'),
+  identifierNotFound('IDENTIFIER_NOT_FOUND'),
+  identifierExists('IDENTIFIER_EXISTS'),
+  verificationExpired('VERIFICATION_EXPIRED'),
+  verificationFailed('VERIFICATION_FAILED'),
+  emailNotVerified('EMAIL_NOT_VERIFIED'),
+  tooManyAttempts('TOO_MANY_ATTEMPTS'),
+  passwordBreached('PASSWORD_BREACHED'),
+  passwordPolicy('PASSWORD_POLICY'),
+  locked('LOCKED');
+
+  const AtlasErrorCode(this.wire);
+
+  /// The code as the API sends it.
+  final String wire;
+
+  /// The known code for a wire value, or null.
+  static AtlasErrorCode? fromWire(String? code) {
+    for (final c in values) {
+      if (c.wire == code) return c;
+    }
+    return null;
+  }
+}
+
 /// The kind of failure an [AtlasException] represents. Mirrors the cases of the
 /// Swift `AtlasError` enum.
 enum AtlasErrorKind {
@@ -141,6 +174,15 @@ class AtlasException implements Exception {
   /// (`form_password_incorrect`, `form_identifier_not_found`, …). Null for
   /// non-API failures.
   String? get code => errors.isNotEmpty ? errors.first.code : null;
+
+  /// The first server error code as a typed [AtlasErrorCode], when the SDK
+  /// knows it; null for other codes and non-API failures ([code] has them all).
+  AtlasErrorCode? get knownCode => AtlasErrorCode.fromWire(code);
+
+  /// The app cannot send email (422 `EMAIL_DELIVERY_NOT_CONFIGURED`); nothing
+  /// was sent. [message] is the server's end-user wording — show it as-is and
+  /// offer another sign-in method.
+  bool get isEmailDeliveryNotConfigured => knownCode == AtlasErrorCode.emailDeliveryNotConfigured;
 
   /// A human-readable message, always non-null so it can go straight to a UI.
   String get message {

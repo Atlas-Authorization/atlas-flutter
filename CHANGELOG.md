@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0
+
+- **Dashboard design in `AtlasSignIn`.** The widget reads `GET /v1/appearance`
+  (also public as `client.appearance()`, cached per client) and, when the app
+  owner saved a design, renders it: light/dark palettes (platform brightness or
+  forced `colorScheme`), card + control radii (999 = pill), border width, card
+  style (glass uses a backdrop blur) / shadow / width, density spacing, button
+  style (solid / outline / soft / gradient), input style (outline / filled /
+  underline), social-button layout (list / grid / icons), font size / weights /
+  type scale / uppercase buttons, and the light/dark logo. Catalog fonts render
+  when the app bundles that family (or maps it via `fonts:`), else the platform
+  font. With `design: null` the widget is unchanged from 0.4.0.
+- **`appearance` overrides.** `AtlasSignIn(appearance: AtlasAppearance(…))`
+  overrides any design token in code (code wins over the dashboard;
+  `applyDashboardDesign: false` ignores the dashboard). `appearanceInfo:` takes a
+  pre-fetched appearance.
+- **Social buttons.** `onSocialSignIn` shows the enabled providers in the
+  design's layout; `AtlasSocialButtons` is exported for custom screens.
+- **Design model.** `AtlasDesign` (tolerant decoder of `design.resolved`:
+  unknown keys ignored, missing/invalid values default), `AtlasAppearanceInfo`,
+  `AtlasDesignStyle` (design → `ThemeData`) and the token enums.
+- **Typed error codes.** `AtlasException.knownCode` → `AtlasErrorCode`;
+  `isEmailDeliveryNotConfigured` for the new 422
+  `EMAIL_DELIVERY_NOT_CONFIGURED`. `AtlasSignIn` shows the server's message and
+  stops offering the email code after that refusal.
+
 ## 0.4.0
 
 - **Multi-step flow drivers.** `createSignIn()`, `createSignUp()` and

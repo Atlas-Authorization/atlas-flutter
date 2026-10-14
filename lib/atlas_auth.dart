@@ -19,11 +19,13 @@ library atlas_auth;
 
 export 'src/atlas_client.dart';
 export 'src/atlas_exception.dart';
+export 'src/design.dart';
 export 'src/models.dart';
 export 'src/native_session.dart';
 export 'src/passkeys.dart';
 export 'src/token_store.dart';
 export 'src/secure_token_store.dart';
 export 'src/widgets/auth_state.dart';
+export 'src/widgets/design_style.dart';
 export 'src/widgets/sign_in_view.dart';
 export 'src/widgets/user_button.dart';

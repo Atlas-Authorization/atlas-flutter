@@ -21,7 +21,7 @@ or add it to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  atlas_auth: ^0.4.0
+  atlas_auth: ^0.5.0
 ```
 
 ## Quickstart
@@ -58,6 +58,19 @@ final rotated = await client.refresh();
 
 // End the session server-side and clear local storage.
 await client.signOut();
+```
+
+`e.knownCode` maps the code to the `AtlasErrorCode` enum when the SDK knows it.
+When the app has no way to send email, any email-sending step (email code, magic
+link, reset, verification) is refused with **422 `EMAIL_DELIVERY_NOT_CONFIGURED`**
+before anything is issued; `e.message` is the server's end-user wording ("This
+app can't send email right now. Try another sign-in method or contact the app
+owner.") — show it as-is. `AtlasSignIn` does, and stops offering the email code
+afterwards.
+
+```dart
+if (e.isEmailDeliveryNotConfigured) showBanner(e.message);
+// or: e.knownCode == AtlasErrorCode.emailDeliveryNotConfigured
 ```
 
 ### OAuth / social sign-in
@@ -232,8 +245,63 @@ AtlasSignIn(
 AtlasUserButton(session: auth, onSignedOut: () => print('bye'));
 ```
 
-Styling follows the ambient `Theme`; wrap the widget in your own `Theme` to
-brand it.
+Without a dashboard design, styling follows the ambient `Theme`; wrap the widget
+in your own `Theme` to brand it.
+
+### Dashboard design + `appearance` overrides — new in **0.5.0**
+
+`AtlasSignIn` reads the instance's appearance (`GET /v1/appearance`, also public
+as `client.appearance()`, cached per client). When the app owner has saved a
+design in the Atlas dashboard, the form renders it:
+
+- colours from the light / dark palettes (following the platform brightness, or
+  the design's forced `colorScheme`);
+- card radius, control radius (999 = pill), border width, card style
+  (solid / glass with backdrop blur / outline / none), card shadow level and
+  width;
+- density spacing (gaps, card padding, control height);
+- button style (solid / outline / soft / gradient), input style
+  (outline / filled / underline), social-button layout (list / grid / icons);
+- base font size, heading scale, body / heading weights, uppercase buttons;
+- the logo (`logo_url`, or `logo_dark_url` in dark mode).
+
+With no saved design (`design: null`) and no `appearance`, the widget is exactly
+the ambient-`Theme` one from 0.4.0.
+
+Override any token in code — a set field wins over the dashboard:
+
+```dart
+AtlasSignIn(
+  client: client,
+  appearance: const AtlasAppearance(
+    palette: {AtlasPaletteSlot.primary: '#0f766e'}, // brand slots carry into dark mode
+    controlRadius: 999,                             // pill buttons + inputs
+    buttonStyle: AtlasButtonStyle.soft,
+    colorScheme: AtlasColorScheme.light,            // ignore platform dark mode
+    // applyDashboardDesign: false,                 // use ONLY these overrides
+  ),
+  onSocialSignIn: (provider) => startOAuth(provider), // shows the enabled providers
+);
+```
+
+**Fonts.** The dashboard names a font from Atlas's catalog (Inter, Roboto, Source
+Serif 4, JetBrains Mono, …). The form asks for that family name, so it renders
+when your app bundles it; otherwise Flutter falls back to the platform font (with
+a serif / monospace fallback for those categories). To bundle one, add the files
+under `flutter: fonts:` in your `pubspec.yaml` with the catalog's family name:
+
+```yaml
+flutter:
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+```
+
+Or map a catalog id to any family you load yourself (e.g. `google_fonts`):
+`AtlasSignIn(fonts: {'inter': GoogleFonts.inter().fontFamily!}, …)`.
 
 ## Native id_token sign-in — new in **0.4.0**
 

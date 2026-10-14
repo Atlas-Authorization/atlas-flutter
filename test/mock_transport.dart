@@ -11,6 +11,13 @@ class MockTransport {
   final List<http.BaseRequest> recorded = [];
   final List<_Stub> _stubs = [];
 
+  /// `GET /v1/appearance` is answered from here, OUTSIDE the FIFO queue and the
+  /// [recorded] list, so a widget's background appearance fetch never shifts
+  /// the canned flow responses. Defaults to "no design saved".
+  String appearanceJson = '{"object":"appearance","design":null,"providers":[]}';
+  int appearanceStatus = 200;
+  final List<http.BaseRequest> appearanceRequests = [];
+
   void enqueue(int status, String json,
       {Map<String, String> headers = const {}}) {
     final merged = <String, String>{'content-type': 'application/json', ...headers};
@@ -18,6 +25,11 @@ class MockTransport {
   }
 
   http.Client client() => MockClient((request) async {
+        if (request.method == 'GET' && request.url.path == '/v1/appearance') {
+          appearanceRequests.add(request);
+          return http.Response(appearanceJson, appearanceStatus,
+              headers: {'content-type': 'application/json'}, request: request);
+        }
         recorded.add(request);
         if (_stubs.isEmpty) {
           throw http.ClientException('no stubbed response', request.url);

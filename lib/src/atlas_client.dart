@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'atlas_exception.dart';
+import 'design.dart';
 import 'models.dart';
 import 'passkeys.dart';
 import 'secure_token_store.dart';
@@ -701,6 +702,35 @@ class AtlasClient {
   /// Whether a session is currently persisted. A cheap, offline check — it does
   /// not validate the token against the server.
   Future<bool> hasSession() async => (await tokenStore.load()) != null;
+
+  Future<AtlasAppearanceInfo>? _appearance;
+
+  /// The instance's public appearance (`GET /v1/appearance`): the dashboard
+  /// design (null until one is saved) and the enabled social providers.
+  ///
+  /// The instance-level result is cached for the client's lifetime (a failed
+  /// fetch is not cached); pass [refresh] to re-read it. [organization] (an org
+  /// id or slug) themes to that org's brand and is never cached.
+  Future<AtlasAppearanceInfo> appearance({String? organization, bool refresh = false}) {
+    Future<AtlasAppearanceInfo> fetch() async {
+      final path = organization == null
+          ? '/v1/appearance'
+          : '/v1/appearance?org=${Uri.encodeQueryComponent(organization)}';
+      final response = await _send('GET', path);
+      _throwIfError(response);
+      return AtlasAppearanceInfo.fromJson(_decode(response));
+    }
+
+    if (organization != null) return fetch();
+    if (refresh || _appearance == null) {
+      final future = fetch();
+      _appearance = future;
+      future.then((_) {}, onError: (Object _) {
+        if (identical(_appearance, future)) _appearance = null;
+      });
+    }
+    return _appearance!;
+  }
 
   /// Release the underlying HTTP client. Call when the client is no longer used.
   void close() => _http.close();

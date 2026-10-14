@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../atlas_client.dart';
 import '../atlas_exception.dart';
+import '../design.dart';
 import '../models.dart';
 import 'auth_state.dart';
+import 'design_style.dart';
 
 /// A prebuilt, self-driving sign-in widget.
 ///
@@ -14,8 +16,15 @@ import 'auth_state.dart';
 /// and calls [onComplete].
 ///
 /// Pure Flutter/Material: no extra native plugin beyond what the SDK already
-/// needs. Styling follows the ambient [Theme]; wrap it in your own `Theme` to
-/// brand it. `AtlasSignIn` is the canonical name; [SignInView] is an alias.
+/// needs. `AtlasSignIn` is the canonical name; [SignInView] is an alias.
+///
+/// **Design.** It reads the instance's appearance (`GET /v1/appearance`, or the
+/// [appearanceInfo] you pass). When the app owner saved a design in the Atlas
+/// dashboard it is rendered — colours (light/dark), fonts, radii, borders,
+/// shadow, density, button / input / social-button styles and the logo.
+/// [appearance] overrides any token in code (code wins over the dashboard).
+/// With no dashboard design and no [appearance], styling follows the ambient
+/// [Theme] exactly as before.
 class AtlasSignIn extends StatefulWidget {
   const AtlasSignIn({
     super.key,
@@ -23,6 +32,10 @@ class AtlasSignIn extends StatefulWidget {
     this.session,
     this.onComplete,
     this.title = 'Sign in',
+    this.appearance,
+    this.appearanceInfo,
+    this.fonts = const {},
+    this.onSocialSignIn,
   });
 
   /// The client whose FAPI the flow drives and whose [TokenStore] the completed
@@ -38,6 +51,23 @@ class AtlasSignIn extends StatefulWidget {
 
   /// Heading shown above the form.
   final String title;
+
+  /// Code-level design overrides (win over the dashboard design).
+  final AtlasAppearance? appearance;
+
+  /// A pre-fetched appearance; when null it is fetched via
+  /// [AtlasClient.appearance] (a failed fetch just keeps the default look).
+  final AtlasAppearanceInfo? appearanceInfo;
+
+  /// Font family names your app provides, keyed by catalog id (`inter`,
+  /// `source-serif`, …) — e.g. from `google_fonts`. Unmapped ids use the catalog
+  /// family name, which renders when the app bundles that family.
+  final Map<String, String> fonts;
+
+  /// When set, the enabled social providers are shown (in the design's layout)
+  /// and the tapped provider id is passed here — start OAuth with
+  /// [AtlasClient.oauthAuthorizeUrl].
+  final void Function(String provider)? onSocialSignIn;
 
   @override
   State<AtlasSignIn> createState() => _AtlasSignInState();
@@ -59,6 +89,47 @@ class _AtlasSignInState extends State<AtlasSignIn> {
   bool _busy = false;
   String? _error;
 
+  /// The typed code of the last error, when the SDK knows it.
+  AtlasErrorCode? _errorCode;
+
+  /// Set once the server refused to send email (`EMAIL_DELIVERY_NOT_CONFIGURED`):
+  /// email-code steps are no longer offered.
+  bool _emailUnavailable = false;
+
+  AtlasAppearanceInfo? _appearance;
+
+  /// The design in effect; null = the plain, ambient-[Theme] look.
+  AtlasDesign? get _design => AtlasDesign.resolve(_appearance?.design, widget.appearance);
+
+  AtlasDesignStyle? _style;
+
+  @override
+  void initState() {
+    super.initState();
+    _appearance = widget.appearanceInfo;
+    if (_appearance == null) {
+      widget.client.appearance().then((info) {
+        if (mounted) setState(() => _appearance = info);
+      }, onError: (Object _) {
+        // Not a user-facing error: the form keeps its default look.
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(AtlasSignIn oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.appearanceInfo != null && widget.appearanceInfo != oldWidget.appearanceInfo) {
+      _appearance = widget.appearanceInfo;
+    }
+  }
+
+  void _showError(AtlasException e) {
+    _error = e.message;
+    _errorCode = e.knownCode;
+    if (e.isEmailDeliveryNotConfigured) _emailUnavailable = true;
+  }
+
   @override
   void dispose() {
     _identifier.dispose();
@@ -72,6 +143,7 @@ class _AtlasSignInState extends State<AtlasSignIn> {
     setState(() {
       _busy = true;
       _error = null;
+      _errorCode = null;
     });
     try {
       final step = await op();
@@ -79,7 +151,7 @@ class _AtlasSignInState extends State<AtlasSignIn> {
       setState(() => _step = step);
       if (step is FlowDone) await _finish();
     } on AtlasException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) setState(() => _showError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -112,7 +184,7 @@ class _AtlasSignInState extends State<AtlasSignIn> {
       final enrollment = await _flow.prepareMfaEnrollment();
       if (mounted) setState(() => _enrollment = enrollment);
     } on AtlasException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (mounted) setState(() => _showError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -129,16 +201,65 @@ class _AtlasSignInState extends State<AtlasSignIn> {
 
   @override
   Widget build(BuildContext context) {
+    final design = _design;
+    if (design == null) {
+      _style = null;
+      return _form(context);
+    }
+    final platformIsDark = MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+    final style = _style = AtlasDesignStyle(design, platformIsDark: platformIsDark, fonts: widget.fonts);
+    final logo = design.logo(platformIsDark: platformIsDark);
+    return Theme(
+      data: style.theme(Theme.of(context)),
+      child: Builder(
+        builder: (context) => AtlasDesignCard(
+          style: style,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (logo != null) ...[
+                Image.network(
+                  logo,
+                  key: const Key('atlas.logo'),
+                  height: design.logoHeight,
+                  fit: BoxFit.contain,
+                  excludeFromSemantics: true,
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+                SizedBox(height: design.spacing.gap),
+              ],
+              _form(context),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _form(BuildContext context) {
     final theme = Theme.of(context);
+    final gap = _style?.design.spacing.gap;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(widget.title, style: theme.textTheme.headlineSmall),
-        const SizedBox(height: 16),
+        SizedBox(height: gap ?? 16),
         if (_error != null) ...[
-          _ErrorBanner(_error!),
-          const SizedBox(height: 12),
+          _ErrorBanner(_error!, code: _errorCode, radius: _style?.controlRadius),
+          SizedBox(height: gap ?? 12),
+        ],
+        if (_step is CollectIdentifier &&
+            widget.onSocialSignIn != null &&
+            (_appearance?.providers.isNotEmpty ?? false)) ...[
+          AtlasSocialButtons(
+            providers: _appearance!.providers,
+            onSelected: widget.onSocialSignIn!,
+            design: _style?.design,
+            fonts: widget.fonts,
+          ),
+          SizedBox(height: gap ?? 16),
         ],
         ..._bodyForStep(),
       ],
@@ -178,6 +299,10 @@ class _AtlasSignInState extends State<AtlasSignIn> {
           const SizedBox(height: 16),
           _primary('Sign in', _submitPassword),
         ];
+      }
+      if (_emailUnavailable) {
+        // The app can't send email; the error banner above says so.
+        return const [];
       }
       // Passwordless: send and collect an email code.
       return [
@@ -294,6 +419,23 @@ class _AtlasSignInState extends State<AtlasSignIn> {
   }
 
   Widget _primary(String label, Future<void> Function() onPressed) {
+    final style = _style;
+    if (style != null) {
+      final kind = style.design.buttonStyle;
+      final ink = kind == AtlasButtonStyle.outline || kind == AtlasButtonStyle.soft
+          ? style.color(AtlasPaletteSlot.primary)
+          : style.color(AtlasPaletteSlot.primaryInk);
+      return FilledButton(
+        onPressed: _busy ? null : () => onPressed(),
+        child: _busy
+            ? SizedBox(
+                height: 18,
+                width: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: ink),
+              )
+            : Text(style.label(label)),
+      );
+    }
     return FilledButton(
       onPressed: _busy ? null : () => onPressed(),
       child: _busy
@@ -308,8 +450,14 @@ class _AtlasSignInState extends State<AtlasSignIn> {
 }
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner(this.message);
+  const _ErrorBanner(this.message, {this.code, this.radius});
   final String message;
+
+  /// The typed error code, when known — kept for semantics / testing.
+  final AtlasErrorCode? code;
+
+  /// The design's control radius, when a design applies.
+  final BorderRadius? radius;
 
   @override
   Widget build(BuildContext context) {
@@ -319,7 +467,7 @@ class _ErrorBanner extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: radius ?? BorderRadius.circular(8),
       ),
       child: Text(
         message,
