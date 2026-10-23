@@ -286,6 +286,29 @@ class SignInFlow {
     return MfaEnrollment.fromJson(_client._decode(response));
   }
 
+  /// §11.1 start enrolling a texted (SMS) second factor mid-sign-in: the server
+  /// registers [phone] (E.164) and texts it a code; confirm with
+  /// [attemptSmsMfaEnrollment]. Offered only where the instance has the SMS
+  /// factor on and can text.
+  Future<MfaEnrollment> prepareSmsMfaEnrollment(String phone) async {
+    final response = await _client._send(
+      'POST',
+      '/v1/client/sign_ins/$_id/prepare_mfa_enrollment',
+      body: {'strategy': 'phone_code', 'phone': phone},
+    );
+    _client._throwIfError(response);
+    return MfaEnrollment.fromJson(_client._decode(response));
+  }
+
+  /// Confirm an SMS enrollment with the texted [code]. On success the backup
+  /// codes are on [backupCodes] and the attempt advances.
+  Future<FlowStep> attemptSmsMfaEnrollment({required String factorId, required String code}) =>
+      _advance(
+        'POST',
+        '/v1/client/sign_ins/$_id/attempt_mfa_enrollment',
+        {'factor_id': factorId, 'code': code},
+      );
+
   /// §11.1 confirm the TOTP enrollment with one or two consecutive [codes]
   /// (`POST …/:id/attempt_mfa_enrollment`). On success the generated backup
   /// codes are surfaced on [backupCodes], and the attempt advances (often to
@@ -473,6 +496,79 @@ class PasswordResetFlow {
     // persist a session when one is materialisable, otherwise leave the user to
     // sign in afresh.
     if (attempt.isComplete && attempt.ticket != null) {
+      await _client._persistAttemptCompletion(attempt, response, decoded);
+    }
+    return nextStep;
+  }
+}
+
+/// A passkey-only **sign-up** (`POST /v1/client/sign_ups/passkey`): the server
+/// runs every sign-up gate and records the account it will create — no user
+/// exists until the passkey is registered ([AtlasClient.createSignUpPasskey]),
+/// so abandoning midway leaves nothing behind. Create one with
+/// [AtlasClient.createPasskeySignUp].
+class PasskeySignUpFlow {
+  PasskeySignUpFlow(this._client);
+
+  final AtlasClient _client;
+  SignInAttempt? _attempt;
+  String? _pollSecret;
+
+  SignInAttempt? get attempt => _attempt;
+  String? get attemptId => _attempt?.id;
+  FlowStatus get status => _attempt == null
+      ? FlowStatus.needsIdentifier
+      : flowStatusFromString(_attempt!.status);
+  FlowStep get nextStep => _stepFor(status, _attempt);
+  bool get isComplete => status == FlowStatus.complete;
+
+  /// True once the attempt waits for its passkey.
+  bool get awaitingPasskey =>
+      _attempt != null &&
+      _attempt!.status == 'needs_first_factor' &&
+      (_attempt!.supportedFirstFactors ?? const <String>[]).contains('passkey');
+
+  /// Start the sign-up. [email] is collected when the instance's passkey
+  /// sign-up asks for one; [captchaToken] when it requires a captcha.
+  Future<FlowStep> start({
+    String? email,
+    String? username,
+    Map<String, String>? fields,
+    bool? consent,
+    String? captchaToken,
+  }) =>
+      _advance('POST', '/v1/client/sign_ups/passkey', {
+        if (email != null && email.isNotEmpty) 'email': email,
+        if (username != null && username.isNotEmpty) 'username': username,
+        if (fields != null && fields.isNotEmpty) 'fields': fields,
+        if (consent == true) 'consent': true,
+        if (captchaToken != null && captchaToken.isNotEmpty) 'captcha_token': captchaToken,
+      });
+
+  /// Submit the emailed verification code (when the instance requires a verified email).
+  Future<FlowStep> attemptVerification(String code) => _advance(
+        'POST',
+        '/v1/client/sign_ups/${Uri.encodeComponent(_passkeyAttemptId)}/attempt_verification',
+        {'code': code},
+      );
+
+  String get _passkeyAttemptId {
+    final id = _attempt?.id;
+    if (id == null || _pollSecret == null) {
+      throw AtlasException.transport('Call start() before creating the passkey.');
+    }
+    return id;
+  }
+
+  Future<FlowStep> _advance(String method, String path, Object body) async {
+    final response = await _client._send(method, path, body: body);
+    _client._throwIfError(response);
+    final decoded = _client._decode(response);
+    final secret = decoded['poll_secret'];
+    if (secret is String && secret.isNotEmpty) _pollSecret = secret;
+    final attempt = SignInAttempt.fromJson(decoded);
+    _attempt = attempt;
+    if (attempt.isComplete) {
       await _client._persistAttemptCompletion(attempt, response, decoded);
     }
     return nextStep;

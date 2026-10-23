@@ -59,7 +59,17 @@ enum AtlasErrorCode {
   tooManyAttempts('TOO_MANY_ATTEMPTS'),
   passwordBreached('PASSWORD_BREACHED'),
   passwordPolicy('PASSWORD_POLICY'),
-  locked('LOCKED');
+  locked('LOCKED'),
+
+  /// 400 — the instance challenges this step and no `captcha_token` was sent
+  /// (e.g. a passkey sign-in begin). Run the captcha and retry with its token.
+  captchaRequired('CAPTCHA_REQUIRED'),
+
+  /// 400 — the `captcha_token` sent was refused.
+  captchaFailed('CAPTCHA_FAILED'),
+
+  /// 403 — the step needs a challenge but no captcha provider is configured.
+  challengeUnavailable('CHALLENGE_UNAVAILABLE');
 
   const AtlasErrorCode(this.wire);
 
@@ -183,6 +193,11 @@ class AtlasException implements Exception {
   /// was sent. [message] is the server's end-user wording — show it as-is and
   /// offer another sign-in method.
   bool get isEmailDeliveryNotConfigured => knownCode == AtlasErrorCode.emailDeliveryNotConfigured;
+
+  /// The step needs a captcha (`CAPTCHA_REQUIRED`) or the one sent was refused
+  /// (`CAPTCHA_FAILED`): run the captcha and retry with its token.
+  bool get isCaptchaRequired =>
+      knownCode == AtlasErrorCode.captchaRequired || knownCode == AtlasErrorCode.captchaFailed;
 
   /// A human-readable message, always non-null so it can go straight to a UI.
   String get message {

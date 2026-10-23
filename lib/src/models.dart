@@ -6,6 +6,8 @@
 /// JSON — rather than a bespoke `JSONValue` wrapper.
 library;
 
+import 'dart:convert';
+
 /// Helper: read a value from JSON as a specific type, or null.
 T? _as<T>(Object? value) => value is T ? value : null;
 
@@ -510,16 +512,127 @@ class ExternalAccountConnection {
 /// [uri] are returned exactly once — show the QR ([uri]) or the [secret] for
 /// manual entry, then confirm with the codes.
 class MfaEnrollment {
-  const MfaEnrollment({required this.factorId, required this.secret, this.uri});
+  const MfaEnrollment({
+    required this.factorId,
+    required this.secret,
+    this.uri,
+    this.strategy = 'totp',
+    this.qrCode,
+    this.phone,
+  });
 
   final String factorId;
+
+  /// totp: the setup key (shown once); empty for a texted factor.
   final String secret;
+
+  /// totp: the `otpauth://` provisioning URI.
   final String? uri;
 
-  factory MfaEnrollment.fromJson(Map<String, dynamic> json) => MfaEnrollment(
-        factorId: _as<String>(json['factor_id']) ?? '',
-        secret: _as<String>(json['secret']) ?? '',
-        uri: _as<String>(json['uri']),
+  /// `totp` or `phone_code`.
+  final String strategy;
+
+  /// totp: the URI as a QR image, a `data:image/...` URL (render it with
+  /// `Image.memory(qrImageBytes!)`); null when the server sends none.
+  final String? qrCode;
+
+  /// phone_code: the (masked) number the code was texted to.
+  final String? phone;
+
+  /// The QR image bytes decoded from [qrCode], if any.
+  List<int>? get qrImageBytes {
+    final qr = qrCode;
+    if (qr == null) return null;
+    final comma = qr.indexOf(',');
+    if (comma < 0) return null;
+    try {
+      return base64Decode(qr.substring(comma + 1));
+    } on FormatException {
+      return null;
+    }
+  }
+
+  factory MfaEnrollment.fromJson(Map<String, dynamic> json) {
+    final qr = _as<String>(json['qr_code']);
+    return MfaEnrollment(
+      factorId: _as<String>(json['factor_id']) ?? '',
+      secret: _as<String>(json['secret']) ?? '',
+      uri: _as<String>(json['uri']),
+      strategy: _as<String>(json['strategy']) ?? 'totp',
+      // Only an image URL a view can render safely.
+      qrCode: qr != null && qr.startsWith('data:image/') ? qr : null,
+      phone: _as<String>(json['phone']),
+    );
+  }
+}
+
+/// Who acted, or what was acted on, in an organization audit entry.
+class AuditParty {
+  const AuditParty({this.type, this.id});
+  final String? type;
+  final String? id;
+
+  factory AuditParty.fromJson(Object? json) {
+    final m = json is Map ? json.cast<String, dynamic>() : const <String, dynamic>{};
+    return AuditParty(type: _as<String>(m['type']), id: _as<String>(m['id']));
+  }
+}
+
+/// One entry of an organization's audit trail.
+class OrganizationAuditLogEntry {
+  const OrganizationAuditLogEntry({
+    required this.id,
+    required this.action,
+    required this.actor,
+    required this.target,
+    required this.organizationId,
+    required this.createdAt,
+    this.ip,
+    this.userAgent,
+    this.metadata = const {},
+  });
+
+  final String id;
+
+  /// e.g. `member.role_changed`.
+  final String action;
+  final AuditParty actor;
+  final AuditParty target;
+  final String organizationId;
+  final String? ip;
+  final String? userAgent;
+  final Map<String, dynamic> metadata;
+
+  /// Epoch ms.
+  final int createdAt;
+
+  factory OrganizationAuditLogEntry.fromJson(Map<String, dynamic> json) => OrganizationAuditLogEntry(
+        id: _as<String>(json['id']) ?? '',
+        action: _as<String>(json['action']) ?? '',
+        actor: AuditParty.fromJson(json['actor']),
+        target: AuditParty.fromJson(json['target']),
+        organizationId: _as<String>(json['organization_id']) ?? '',
+        ip: _as<String>(json['ip']),
+        userAgent: _as<String>(json['user_agent']),
+        metadata: json['metadata'] is Map ? (json['metadata'] as Map).cast<String, dynamic>() : const {},
+        createdAt: (json['created_at'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One page of an organization's audit trail.
+class OrganizationAuditLogPage {
+  const OrganizationAuditLogPage({required this.data, required this.hasMore, this.nextCursor});
+  final List<OrganizationAuditLogEntry> data;
+  final bool hasMore;
+  final String? nextCursor;
+
+  factory OrganizationAuditLogPage.fromJson(Map<String, dynamic> json) => OrganizationAuditLogPage(
+        data: (json['data'] is List ? json['data'] as List : const [])
+            .whereType<Map>()
+            .map((e) => OrganizationAuditLogEntry.fromJson(e.cast<String, dynamic>()))
+            .toList(growable: false),
+        hasMore: json['has_more'] == true,
+        nextCursor: _as<String>(json['next_cursor']),
       );
 }
 

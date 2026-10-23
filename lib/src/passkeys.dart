@@ -90,6 +90,10 @@ Map<String, String> passkeyRegistrationFinishBody(
   };
 }
 
+/// The passkey sign-in `begin` body: the captcha token when there is one.
+Map<String, String> passkeySignInBeginBody(String? captchaToken) =>
+    captchaToken == null || captchaToken.isEmpty ? const <String, String>{} : {'captcha_token': captchaToken};
+
 /// Map an assertion `begin` response + a get result to the `finish` body.
 ///
 /// Field names are the server's: `handle`, `challenge`, `credential_id`,

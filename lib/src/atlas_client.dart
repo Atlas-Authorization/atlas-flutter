@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
@@ -77,6 +78,53 @@ class AtlasClient {
   }
 
   final String publishableKey;
+
+  /// Supplies the stable device id sent on account-creating starts (see
+  /// [deviceIdRoutes]). Defaults to a random id stable for the process; set it
+  /// to read your own persistent storage to keep the id across launches, or
+  /// return null to send none.
+  String? Function() deviceIdProvider = _processDeviceId;
+
+  /// The routes that carry `device_id` — every start that can create an account
+  /// (the JS SDK's `DEVICE_ID_ROUTES`), so the instance's accounts-per-device
+  /// abuse limit can count devices rather than networks. Password and
+  /// passwordless sign-ins never send it.
+  static const Set<String> deviceIdRoutes = {
+    '/v1/client/sign_ups',
+    '/v1/client/sign_ins/oauth',
+    '/v1/client/sign_ins/sso',
+    '/v1/client/sign_ins/saml',
+    '/v1/client/sign_ins/discourse',
+    '/v1/client/sign_ins/id_token',
+    '/v1/client/sign_ins/external_jwt',
+    '/v1/client/sign_ins/ldap',
+    '/v1/oauth/telegram',
+    '/v1/oauth/siwe/verify',
+    '/v1/oauth/siws/verify',
+    '/v1/oauth/siwf/verify',
+  };
+
+  static String? _deviceIdForProcess;
+
+  /// A fresh random device id (`d_` + 32 hex characters).
+  static String freshDeviceId() {
+    final random = Random.secure();
+    final hex = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    return 'd_$hex';
+  }
+
+  static String? _processDeviceId() => _deviceIdForProcess ??= freshDeviceId();
+
+  /// [body] with `device_id` added when [path] is a device-id route and the
+  /// body (a JSON object) does not already carry one.
+  static Object? stampDeviceId(String method, String path, Object? body, String? Function() id) {
+    if (method != 'POST' || body is! Map) return body;
+    final bare = path.split('?').first;
+    if (!deviceIdRoutes.contains(bare) || body.containsKey('device_id')) return body;
+    final value = id();
+    if (value == null) return body;
+    return <String, dynamic>{...body.cast<String, dynamic>(), 'device_id': value};
+  }
 
   /// The resolved base URL, e.g. `https://clerk.example.com`.
   final String baseUrl;
@@ -306,6 +354,46 @@ class AtlasClient {
   }
 
   // MARK: - Organizations
+
+  /// One page of an organization's audit trail
+  /// (`GET /v1/client/organizations/:id/audit_logs`), newest first. Needs the
+  /// `org:sys_memberships:manage` permission (organization admins). [action]
+  /// filters exactly, or by prefix when it ends in a dot (`member.`); page on
+  /// with [OrganizationAuditLogPage.nextCursor] as [startingAfter].
+  Future<OrganizationAuditLogPage> organizationAuditLog(
+    String organizationId, {
+    int? limit,
+    String? startingAfter,
+    String? action,
+  }) async {
+    final query = <String>[
+      if (limit != null) 'limit=$limit',
+      if (startingAfter != null) 'starting_after=${Uri.encodeQueryComponent(startingAfter)}',
+      if (action != null) 'action=${Uri.encodeQueryComponent(action)}',
+    ].join('&');
+    final path = '/v1/client/organizations/${Uri.encodeComponent(organizationId)}/audit_logs'
+        '${query.isEmpty ? '' : '?$query'}';
+    return OrganizationAuditLogPage.fromJson(await _authedJson('GET', path));
+  }
+
+  /// Create the passkey for a passkey-only sign-up, and with it the account:
+  /// `sign_ups/:id/passkey/begin` → the platform ceremony → `…/finish`. Call
+  /// once [PasskeySignUpFlow.awaitingPasskey] is true; on success the flow is
+  /// complete and the session persisted.
+  Future<FlowStep> createSignUpPasskey(PasskeySignUpFlow flow, {String? name}) async {
+    final id = flow._passkeyAttemptId;
+    final pollSecret = flow._pollSecret!;
+    final begin = await _postJson(
+      '/v1/client/sign_ups/${Uri.encodeComponent(id)}/passkey/begin',
+      {'poll_secret': pollSecret},
+    );
+    final credential = await _passkeys.register(RegisterRequestType.fromJson(begin));
+    final body = {...passkeyRegistrationFinishBody(begin, credential, name: name), 'poll_secret': pollSecret};
+    return flow._advance('POST', '/v1/client/sign_ups/${Uri.encodeComponent(id)}/passkey/finish', body);
+  }
+
+  /// Start a passkey-only sign-up (see [PasskeySignUpFlow]).
+  PasskeySignUpFlow createPasskeySignUp() => PasskeySignUpFlow(this);
 
   /// The signed-in user's organization memberships
   /// (`GET /v1/client/me/organizations`).
@@ -595,10 +683,14 @@ class AtlasClient {
   /// `rpId` and `challenge` are taken from the `begin` response. A ceremony the
   /// user cancels or with no credential available surfaces as the plugin's own
   /// typed exception.
-  Future<AtlasUser> signInWithPasskey() async {
+  ///
+  /// [captchaToken] is the sign-in captcha token, when the instance challenges
+  /// sign-ins. Without one such an instance answers 400 `CAPTCHA_REQUIRED`
+  /// ([AtlasException.isCaptchaRequired]): run the captcha and call again.
+  Future<AtlasUser> signInWithPasskey({String? captchaToken}) async {
     final begin = await _postJson(
       '/v1/client/sign_ins/passkey/begin',
-      const <String, String>{},
+      passkeySignInBeginBody(captchaToken),
     );
 
     final assertion =
@@ -780,9 +872,10 @@ class AtlasClient {
     final headers = <String, String>{'x-publishable-key': publishableKey};
     if (cookie != null) headers['Cookie'] = cookie;
     String? encoded;
-    if (body != null) {
+    final stamped = stampDeviceId(method, path, body, deviceIdProvider);
+    if (stamped != null) {
       headers['content-type'] = 'application/json';
-      encoded = jsonEncode(body);
+      encoded = jsonEncode(stamped);
     }
 
     try {

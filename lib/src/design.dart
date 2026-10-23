@@ -709,6 +709,9 @@ String atlasProviderName(String id) {
     'tiktok': 'TikTok',
     'hubspot': 'HubSpot',
     'huggingface': 'Hugging Face',
+    'cognito': 'AWS Cognito',
+    'paybin': 'Paybin',
+    'railway': 'Railway',
   };
   return known[id] ??
       id

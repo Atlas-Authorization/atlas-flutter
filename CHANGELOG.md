@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — 2026-10-23
+
+- **Device id on account-creating starts.** Email sign-up and the social / SSO / id_token sign-in starts carry a random `device_id` for the instance's accounts-per-device abuse limit, like the JS SDK (`AtlasClient.deviceIdRoutes`). `AtlasClient.deviceIdProvider` defaults to an id stable for the process; point it at your own persistent storage to keep it across launches.
+- **Passkey sign-in captcha.** `signInWithPasskey(captchaToken:)` forwards the sign-in captcha token; an instance that challenges sign-ins answers `CAPTCHA_REQUIRED` without one (`AtlasException.isCaptchaRequired`, `AtlasErrorCode.captchaRequired` / `captchaFailed` / `challengeUnavailable`).
+- **Passkey-only sign-up.** `createPasskeySignUp()` → `PasskeySignUpFlow` (`start`, `attemptVerification`, `awaitingPasskey`) and `createSignUpPasskey(flow)` (begin → platform ceremony → finish). The account exists only once the passkey is registered.
+- **SMS MFA enrolment mid-sign-in.** `SignInFlow.prepareSmsMfaEnrollment(phone)` and `attemptSmsMfaEnrollment(factorId:, code:)`. `MfaEnrollment` carries `strategy`, `phone`, and for TOTP the QR image `qrCode` with `qrImageBytes`.
+- **Organization audit log.** `organizationAuditLog(organizationId, limit:, startingAfter:, action:)` (`GET /v1/client/organizations/:id/audit_logs`, organization admins).
+
 ## 0.5.0
 
 - **Dashboard design in `AtlasSignIn`.** The widget reads `GET /v1/appearance`
