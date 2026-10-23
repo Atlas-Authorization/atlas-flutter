@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart' as launcher;
 
 import 'atlas_exception.dart';
 import 'design.dart';
@@ -84,6 +85,17 @@ class AtlasClient {
   /// to read your own persistent storage to keep the id across launches, or
   /// return null to send none.
   String? Function() deviceIdProvider = _processDeviceId;
+
+  /// Opens the logout URL [signOut] hands back — the upstream OIDC provider's
+  /// end-session URL, or the SAML Single Logout start URL — so the user is
+  /// signed out there too. Defaults to [openInSystemBrowser]; set it to your
+  /// own opener, or null to only receive the URL in the [SignOutResult].
+  Future<void> Function(Uri url)? logoutUrlOpener = openInSystemBrowser;
+
+  /// Open [url] in the system browser (outside the app).
+  static Future<void> openInSystemBrowser(Uri url) async {
+    await launcher.launchUrl(url, mode: launcher.LaunchMode.externalApplication);
+  }
 
   /// The routes that carry `device_id` — every start that can create an account
   /// (the JS SDK's `DEVICE_ID_ROUTES`), so the instance's accounts-per-device
@@ -380,14 +392,23 @@ class AtlasClient {
   /// `sign_ups/:id/passkey/begin` → the platform ceremony → `…/finish`. Call
   /// once [PasskeySignUpFlow.awaitingPasskey] is true; on success the flow is
   /// complete and the session persisted.
-  Future<FlowStep> createSignUpPasskey(PasskeySignUpFlow flow, {String? name}) async {
+  Future<FlowStep> createSignUpPasskey(
+    PasskeySignUpFlow flow, {
+    String? name,
+    AtlasPasskeyPrf? prf,
+    void Function(AtlasPasskeyPrfResult result)? onPrfResult,
+  }) async {
     final id = flow._passkeyAttemptId;
     final pollSecret = flow._pollSecret!;
     final begin = await _postJson(
       '/v1/client/sign_ups/${Uri.encodeComponent(id)}/passkey/begin',
       {'poll_secret': pollSecret},
     );
-    final credential = await _passkeys.register(RegisterRequestType.fromJson(begin));
+    final credential = await _passkeys.register(RegisterRequestType.fromJson(withPasskeyPrf(begin, prf)));
+    if (prf != null && onPrfResult != null) {
+      final result = readPasskeyPrfResult(credential.rawId, credential.clientExtensionResults);
+      if (result != null) onPrfResult(result);
+    }
     final body = {...passkeyRegistrationFinishBody(begin, credential, name: name), 'poll_secret': pollSecret};
     return flow._advance('POST', '/v1/client/sign_ups/${Uri.encodeComponent(id)}/passkey/finish', body);
   }
@@ -641,7 +662,11 @@ class AtlasClient {
   /// hardcoded. Server failures surface as [AtlasException]; a ceremony the user
   /// cancels or that finds no authenticator surfaces as the plugin's own typed
   /// exception (e.g. `PasskeyAuthCancelledException`).
-  Future<Passkey> registerPasskey({String? name}) async {
+  Future<Passkey> registerPasskey({
+    String? name,
+    AtlasPasskeyPrf? prf,
+    void Function(AtlasPasskeyPrfResult result)? onPrfResult,
+  }) async {
     final stored = await tokenStore.load();
     if (stored == null) throw AtlasException.notSignedIn();
 
@@ -655,7 +680,11 @@ class AtlasClient {
     final begin = _decode(beginResponse);
 
     final credential =
-        await _passkeys.register(RegisterRequestType.fromJson(begin));
+        await _passkeys.register(RegisterRequestType.fromJson(withPasskeyPrf(begin, prf)));
+    if (prf != null && onPrfResult != null) {
+      final result = readPasskeyPrfResult(credential.rawId, credential.clientExtensionResults);
+      if (result != null) onPrfResult(result);
+    }
     final body = passkeyRegistrationFinishBody(begin, credential, name: name);
 
     final finishResponse = await _send(
@@ -687,14 +716,23 @@ class AtlasClient {
   /// [captchaToken] is the sign-in captcha token, when the instance challenges
   /// sign-ins. Without one such an instance answers 400 `CAPTCHA_REQUIRED`
   /// ([AtlasException.isCaptchaRequired]): run the captcha and call again.
-  Future<AtlasUser> signInWithPasskey({String? captchaToken}) async {
+  Future<AtlasUser> signInWithPasskey({
+    String? captchaToken,
+    AtlasPasskeyPrf? prf,
+    void Function(AtlasPasskeyPrfResult result)? onPrfResult,
+  }) async {
     final begin = await _postJson(
       '/v1/client/sign_ins/passkey/begin',
       passkeySignInBeginBody(captchaToken),
     );
 
     final assertion =
-        await _passkeys.authenticate(AuthenticateRequestType.fromJson(begin));
+        await _passkeys.authenticate(AuthenticateRequestType.fromJson(withPasskeyPrf(begin, prf)));
+    if (prf != null && onPrfResult != null) {
+      final rawId = assertion.rawId.isNotEmpty ? assertion.rawId : assertion.id;
+      final result = readPasskeyPrfResult(rawId, assertion.clientExtensionResults);
+      if (result != null) onPrfResult(result);
+    }
     final body = passkeyAssertionFinishBody(begin, assertion);
 
     final response =
@@ -772,16 +810,29 @@ class AtlasClient {
   /// (`POST /v1/client/sessions/:id/revoke`) and clear local storage. Local
   /// state is cleared even if the network call fails — a client that keeps a
   /// token after the user tapped "sign out" is the worse failure.
-  Future<void> signOut() async {
+  ///
+  /// When the session came from an upstream OIDC provider set to RP-initiated
+  /// logout, or a SAML connection with Single Logout, Atlas answers with the URL
+  /// that signs the user out there too ([SignOutResult.upstreamLogoutUrl] /
+  /// [SignOutResult.samlLogoutUrl], https only). With [followLogoutUrl] (the
+  /// default) it is opened through [logoutUrlOpener] — the system browser by
+  /// default. [returnUrl] (on an allowed origin) is where the upstream sends the
+  /// browser back.
+  Future<SignOutResult> signOut({String? returnUrl, bool followLogoutUrl = true}) async {
     final stored = await tokenStore.load();
+    var result = const SignOutResult();
     try {
       if (stored != null) {
         try {
-          await _send(
+          final response = await _send(
             'POST',
             '/v1/client/sessions/${stored.sessionId}/revoke',
+            body: returnUrl == null ? null : {'return_url': returnUrl, 'redirect_url': returnUrl},
             cookie: _cookieHeader(stored),
           );
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            result = SignOutResult.fromBody(response.body);
+          }
         } catch (_) {
           // Best-effort revoke; local clear below is what matters.
         }
@@ -789,7 +840,66 @@ class AtlasClient {
     } finally {
       await tokenStore.clear();
     }
+    final url = result.logoutUrl;
+    final opener = logoutUrlOpener;
+    if (followLogoutUrl && url != null && opener != null) {
+      try {
+        await opener(Uri.parse(url));
+      } catch (_) {
+        // The user is signed out locally either way; the URL is in the result.
+      }
+    }
+    return result;
   }
+
+  // MARK: - Device sign-in approval (RFC 8628)
+
+  /// Normalise what a person typed into the `XXXX-XXXX` form devices show:
+  /// uppercase, spaces and dashes ignored. Returns the trimmed input unchanged
+  /// when it is not 8 letters or digits.
+  static String formatUserCode(String input) {
+    final cleaned = input.toUpperCase().replaceAll(RegExp('[^A-Z0-9]'), '');
+    return cleaned.length == 8 ? '${cleaned.substring(0, 4)}-${cleaned.substring(4)}' : input.trim();
+  }
+
+  /// The `user_code` of a verification URL a device displayed (`?user_code=`,
+  /// e.g. from its QR code), formatted; null when there is none.
+  static String? userCodeFromUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme) return null;
+    final value = uri.queryParameters['user_code'];
+    return value == null || value.isEmpty ? null : formatUserCode(value);
+  }
+
+  /// Look up a pending device sign-in by the code a TV, watch or CLI shows
+  /// (`POST /v1/client/me/device_authorizations/lookup`). Show
+  /// [DeviceAuthorization.client] and [DeviceAuthorization.scopes], then
+  /// approve or deny. Throws [AtlasException] of kind
+  /// [AtlasErrorKind.notSignedIn] without a session.
+  Future<DeviceAuthorization> lookupDeviceAuthorization(String userCode) async =>
+      DeviceAuthorization.fromJson(await _authedJson(
+        'POST',
+        '/v1/client/me/device_authorizations/lookup',
+        body: {'user_code': formatUserCode(userCode)},
+      ));
+
+  /// Approve the device sign-in for the signed-in user; the device's next poll
+  /// receives its tokens. When the application requires a recent
+  /// re-authentication this throws [AtlasException] with code
+  /// `STEP_UP_REQUIRED` — re-authenticate, then approve again.
+  Future<DeviceAuthorization> approveDeviceAuthorization(DeviceAuthorization authorization) =>
+      _decideDeviceAuthorization(authorization, 'approve');
+
+  /// Deny the device sign-in; the device's next poll is told `access_denied`.
+  Future<DeviceAuthorization> denyDeviceAuthorization(DeviceAuthorization authorization) =>
+      _decideDeviceAuthorization(authorization, 'deny');
+
+  Future<DeviceAuthorization> _decideDeviceAuthorization(DeviceAuthorization authorization, String decision) async =>
+      DeviceAuthorization.fromJson(await _authedJson(
+        'POST',
+        '/v1/client/me/device_authorizations/${Uri.encodeComponent(authorization.id)}/$decision',
+        body: {'user_code': authorization.userCode},
+      ));
 
   /// Whether a session is currently persisted. A cheap, offline check — it does
   /// not validate the token against the server.

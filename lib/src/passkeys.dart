@@ -20,6 +20,9 @@
 /// them out of the WebAuthn options.
 library;
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:passkeys/authenticator.dart';
 import 'package:passkeys/types.dart';
 
@@ -117,4 +120,75 @@ Map<String, String> passkeyAssertionFinishBody(
     'client_data_json': assertion.clientDataJSON,
     'signature': assertion.signature,
   };
+}
+
+
+/// Ask the authenticator for a PRF output (the WebAuthn `prf` extension) during
+/// a passkey ceremony — e.g. to derive a client-side encryption key only this
+/// passkey can unlock. The salt and the output stay on the device: the output
+/// reaches only your `onPrfResult` callback and nothing PRF-related is sent to
+/// Atlas. The `passkeys` plugin evaluates one salt ([first]); authenticators
+/// without PRF support return no output.
+class AtlasPasskeyPrf {
+  const AtlasPasskeyPrf(this.first);
+
+  /// A salt given as a string is encoded as UTF-8 (the same rule as the web SDK).
+  factory AtlasPasskeyPrf.fromSalt(String salt) => AtlasPasskeyPrf(Uint8List.fromList(utf8.encode(salt)));
+
+  /// The salt (bytes).
+  final Uint8List first;
+}
+
+/// The PRF output of a ceremony: [enabled] is reported on registration (whether
+/// the new passkey supports PRF); [first] is the 32-byte output for the salt,
+/// when the authenticator evaluated it.
+class AtlasPasskeyPrfResult {
+  const AtlasPasskeyPrfResult({required this.credentialId, this.enabled, this.first, this.second});
+
+  final String credentialId;
+  final bool? enabled;
+  final Uint8List? first;
+  final Uint8List? second;
+}
+
+String _b64url(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
+
+Uint8List? _b64urlDecode(Object? value) {
+  if (value is! String || value.isEmpty) return null;
+  try {
+    return base64Url.decode(base64Url.normalize(value));
+  } on FormatException {
+    return null;
+  }
+}
+
+/// [begin] with the `prf` extension (`eval.first`) added, so the plugin's
+/// request types pick the salt up. Returns [begin] unchanged when [prf] is null.
+Map<String, dynamic> withPasskeyPrf(Map<String, dynamic> begin, AtlasPasskeyPrf? prf) {
+  if (prf == null) return begin;
+  final existing = begin['extensions'];
+  return <String, dynamic>{
+    ...begin,
+    'extensions': <String, dynamic>{
+      if (existing is Map) ...existing.cast<String, dynamic>(),
+      'prf': <String, dynamic>{
+        'eval': <String, dynamic>{'first': _b64url(prf.first)},
+      },
+    },
+  };
+}
+
+/// Read the `prf` client-extension results the platform returned; null when
+/// there are none.
+AtlasPasskeyPrfResult? readPasskeyPrfResult(String credentialId, Map<String?, Object?>? clientExtensionResults) {
+  final prf = clientExtensionResults?['prf'];
+  if (prf is! Map) return null;
+  final results = prf['results'];
+  final enabled = prf['enabled'];
+  return AtlasPasskeyPrfResult(
+    credentialId: credentialId,
+    enabled: enabled is bool ? enabled : (results is Map ? true : null),
+    first: results is Map ? _b64urlDecode(results['first']) : null,
+    second: results is Map ? _b64urlDecode(results['second']) : null,
+  );
 }

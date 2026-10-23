@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 — 2026-10-24
+
+- **Upstream logout on sign-out.** `signOut({returnUrl, followLogoutUrl})` now returns a `SignOutResult` with the upstream OIDC provider's `upstreamLogoutUrl` and the SAML `samlLogoutUrl` (https only) that Atlas hands back when the session came from such a provider, and opens it in the system browser through `AtlasClient.logoutUrlOpener` (default `AtlasClient.openInSystemBrowser`, via `url_launcher`; set it to null to only receive the URL). `returnUrl` must be on an allowed origin. New dependency: `url_launcher`.
+- **Device sign-in approval.** `lookupDeviceAuthorization(userCode)`, `approveDeviceAuthorization`, `denyDeviceAuthorization` (`DeviceAuthorization`) let a signed-in phone approve the code a TV, watch or CLI shows; `AtlasClient.formatUserCode`, `AtlasClient.userCodeFromUrl` (for a scanned QR code). A refusal needing a fresh re-authentication carries code `STEP_UP_REQUIRED`.
+- **Passkey PRF pass-through.** `registerPasskey`, `signInWithPasskey` and `createSignUpPasskey` take `prf: AtlasPasskeyPrf` (bytes, or `AtlasPasskeyPrf.fromSalt('...')` as UTF-8) and `onPrfResult`. The salt goes to the `passkeys` plugin (iOS ASAuthorization / Android Credential Manager) and the output (`AtlasPasskeyPrfResult`) reaches only the callback — nothing PRF-related is sent to Atlas. `withPasskeyPrf` / `readPasskeyPrfResult` are exported for custom authenticators.
+- `signOut()` returns `Future<SignOutResult>` instead of `Future<void>` (existing calls compile unchanged).
+
 ## 0.6.0 — 2026-10-23
 
 - **Device id on account-creating starts.** Email sign-up and the social / SSO / id_token sign-in starts carry a random `device_id` for the instance's accounts-per-device abuse limit, like the JS SDK (`AtlasClient.deviceIdRoutes`). `AtlasClient.deviceIdProvider` defaults to an id stable for the process; point it at your own persistent storage to keep it across launches.

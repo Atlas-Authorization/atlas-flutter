@@ -1,6 +1,6 @@
 name: atlas_auth
 description: Official Flutter/Dart client SDK for Atlas — the client-facing auth core (FAPI) for a native app. Peer of the Swift and Kotlin SDKs.
-version: 0.6.0
+version: 0.7.0
 homepage: https://atlasauth.net
 repository: https://github.com/Atlas-Authorization/atlas-flutter
 documentation: https://atlasauth.net/docs
@@ -23,6 +23,9 @@ dependencies:
   # Native passkey (WebAuthn) bridge: one Dart API over iOS ASAuthorization and
   # Android Credential Manager. Drives the begin→finish ceremonies.
   passkeys: ^2.23.1
+  # Opens the upstream / SAML logout URL a sign-out hands back in the system
+  # browser (overridable with AtlasClient.logoutUrlOpener).
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:

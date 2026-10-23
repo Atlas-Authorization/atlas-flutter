@@ -670,3 +670,121 @@ class SecondFactorPreparation {
         raw: json,
       );
 }
+
+
+/// What a sign-out hands back for signing out of the upstream identity provider
+/// too: the upstream OIDC end-session URL and the SAML Single Logout start URL
+/// (`https` only). Open [logoutUrl] in the system browser.
+class SignOutResult {
+  const SignOutResult({this.upstreamLogoutUrl, this.samlLogoutUrl});
+
+  /// Read the logout URLs from a revoke response body, keeping only https ones.
+  factory SignOutResult.fromBody(String body) {
+    Object? decoded;
+    try {
+      decoded = body.isEmpty ? null : jsonDecode(body);
+    } on FormatException {
+      decoded = null;
+    }
+    if (decoded is! Map) return const SignOutResult();
+    final Map top = decoded;
+    final Map root = top['response'] is Map ? top['response'] as Map : top;
+    String? https(String key) {
+      final v = root[key] ?? top[key];
+      return v is String && v.startsWith('https://') ? v : null;
+    }
+
+    return SignOutResult(upstreamLogoutUrl: https('upstream_logout_url'), samlLogoutUrl: https('saml_logout_url'));
+  }
+
+  final String? upstreamLogoutUrl;
+  final String? samlLogoutUrl;
+
+  /// The URL to open: the SAML one, else the upstream OIDC one.
+  String? get logoutUrl => samlLogoutUrl ?? upstreamLogoutUrl;
+}
+
+/// One requested scope of a [DeviceAuthorization], with a human description.
+class DeviceAuthorizationScope {
+  const DeviceAuthorizationScope({required this.scope, required this.description});
+  final String scope;
+  final String description;
+}
+
+/// The client (the TV, console or CLI app) asking to sign in.
+class DeviceAuthorizationClient {
+  const DeviceAuthorizationClient({
+    required this.clientId,
+    required this.name,
+    this.logoUrl,
+    this.homepageUrl,
+    this.firstParty = false,
+  });
+  final String clientId;
+  final String name;
+  final String? logoUrl;
+  final String? homepageUrl;
+  final bool firstParty;
+}
+
+/// A pending device sign-in (OAuth 2.0 Device Authorization Grant): the code a
+/// TV, watch or CLI shows, which the signed-in user approves from this app.
+class DeviceAuthorization {
+  const DeviceAuthorization({
+    required this.id,
+    required this.userCode,
+    required this.status,
+    required this.client,
+    required this.scopes,
+    this.audience,
+    this.requiresStepUp = false,
+    this.createdAt,
+    this.expiresAt,
+  });
+
+  factory DeviceAuthorization.fromJson(Map<String, dynamic> json) {
+    final client = json['client'] is Map ? (json['client'] as Map).cast<String, dynamic>() : const <String, dynamic>{};
+    final scopes = json['scopes'] is List ? json['scopes'] as List : const [];
+    return DeviceAuthorization(
+      id: json['id'] as String? ?? '',
+      userCode: json['user_code'] as String? ?? '',
+      status: json['status'] as String? ?? 'pending',
+      client: DeviceAuthorizationClient(
+        clientId: client['client_id'] as String? ?? '',
+        name: client['name'] as String? ?? '',
+        logoUrl: client['logo_url'] as String?,
+        homepageUrl: client['homepage_url'] as String?,
+        firstParty: client['first_party'] == true,
+      ),
+      scopes: scopes
+          .whereType<Map>()
+          .map((s) => DeviceAuthorizationScope(
+                scope: s['scope'] as String? ?? '',
+                description: s['description'] as String? ?? '',
+              ))
+          .toList(growable: false),
+      audience: json['audience'] as String?,
+      requiresStepUp: json['requires_step_up'] == true,
+      createdAt: (json['created_at'] as num?)?.toInt(),
+      expiresAt: (json['expires_at'] as num?)?.toInt(),
+    );
+  }
+
+  final String id;
+
+  /// The code as the device shows it (`XXXX-XXXX`).
+  final String userCode;
+
+  /// `pending`, `approved` or `denied`.
+  final String status;
+  final DeviceAuthorizationClient client;
+  final List<DeviceAuthorizationScope> scopes;
+
+  /// The API the device asked a token for, if any.
+  final String? audience;
+
+  /// Approving needs a recent re-authentication.
+  final bool requiresStepUp;
+  final int? createdAt;
+  final int? expiresAt;
+}
