@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — 2026-10-24
+
+- **Policy acceptance** (terms of service, privacy, any policy the app defines).
+  - Client API: `client.policies(locale:)` (`GET /v1/client/policies`), `client.myPolicies()` and `client.acceptMyPolicies(...)` (in-app re-acceptance, `PolicyGate`), and `client.signUpPolicyController()` / `client.policyController(attempt)` which build a `PolicyAcceptanceController` (per-policy ticks, reading clock, scroll-to-end flag, `canSubmit()`, `build()` into `policy_acceptances`).
+  - Sign-up: `SignUpFlow.create(..., policyAcceptances:)` and `PasskeySignUpFlow.start(..., policyAcceptances:)`. A 422 `POLICY_ACCEPTANCE_REQUIRED` is `AtlasException.isPolicyAcceptanceRequired`; `client.refreshPoliciesOnRequired(controller, error)` reloads the list.
+  - Sign-in: the new `FlowStatus.needsPolicyAcceptance` / `AcceptPolicies` step (`SignInAttempt.pendingPolicies`, `policyAcceptanceToken`) continues with `acceptPolicies(...)` on `SignInFlow`, `SignUpFlow`, `PasswordResetFlow` and `PasskeySignUpFlow`. `AtlasRedirectResult.parse(url)` reads `__atlas_attempt` / `__atlas_status` / `__atlas_policy_token` from a web-auth or custom-tab callback, and `client.resumeSignIn(redirect)` / `resumeSignUp(redirect)` continue the held attempt. `SignInFlow.startWithIdToken(...)` keeps a native id_token sign-in in the flow so it can be continued.
+  - Widgets: `AtlasPolicyConsent` (checkbox, combined or per policy, with an in-app document viewer), `AtlasPolicyClickwrap`, `AtlasPolicyScrollDialog` / `runScrollPolicies` (unskippable dialog, Accept after the end is seen or when the text fits, Decline cancels), `AtlasPolicyAcceptStep`, `AtlasPolicyGate` (banner plus re-acceptance), `AtlasPolicyDocument`. `AtlasSignIn` shows the accept step itself. Documents are drawn natively from the server's sanitised HTML (`parsePolicyHtml`), not in a web view. All wording is overridable with `AtlasPolicyStrings`.
+
 ## 0.7.0 — 2026-10-24
 
 - **Upstream logout on sign-out.** `signOut({returnUrl, followLogoutUrl})` now returns a `SignOutResult` with the upstream OIDC provider's `upstreamLogoutUrl` and the SAML `samlLogoutUrl` (https only) that Atlas hands back when the session came from such a provider, and opens it in the system browser through `AtlasClient.logoutUrlOpener` (default `AtlasClient.openInSystemBrowser`, via `url_launcher`; set it to null to only receive the URL). `returnUrl` must be on an allowed origin. New dependency: `url_launcher`.

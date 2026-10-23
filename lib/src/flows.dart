@@ -21,6 +21,10 @@ enum FlowStatus {
   needsOauthCallback,
   needsNewPassword,
   needsCaptcha,
+
+  /// The server holds the attempt until the user accepts the pending policies
+  /// (terms, privacy, a newer version of either).
+  needsPolicyAcceptance,
   complete,
   abandoned,
 
@@ -49,6 +53,8 @@ FlowStatus flowStatusFromString(String status) {
       return FlowStatus.needsNewPassword;
     case 'needs_captcha':
       return FlowStatus.needsCaptcha;
+    case 'needs_policy_acceptance':
+      return FlowStatus.needsPolicyAcceptance;
     case 'complete':
       return FlowStatus.complete;
     case 'abandoned':
@@ -102,6 +108,16 @@ class CollectCaptcha extends FlowStep {
   const CollectCaptcha();
 }
 
+/// The server holds the attempt until the user accepts [policies] (terms,
+/// privacy, a newer version of either). Show them (`AtlasPolicyAcceptStep`, or
+/// your own UI over a [PolicyAcceptanceController] from
+/// [AtlasClient.policyController]) and send the result with `acceptPolicies`.
+/// The entries from the attempt carry no content until the controller fills it in.
+class AcceptPolicies extends FlowStep {
+  const AcceptPolicies(this.policies);
+  final List<AtlasPolicy> policies;
+}
+
 /// Waiting on an OAuth redirect to return.
 class AwaitOauth extends FlowStep {
   const AwaitOauth();
@@ -145,6 +161,8 @@ FlowStep _stepFor(FlowStatus status, SignInAttempt? attempt) {
       return const CollectCaptcha();
     case FlowStatus.needsOauthCallback:
       return const AwaitOauth();
+    case FlowStatus.needsPolicyAcceptance:
+      return AcceptPolicies(pendingPoliciesOf(attempt));
     case FlowStatus.complete:
       return FlowDone(attempt?.createdSessionId);
     case FlowStatus.abandoned:
@@ -193,6 +211,32 @@ class SignInFlow {
   /// Create the attempt with an [identifier] (`POST /v1/client/sign_ins`).
   Future<FlowStep> start(String identifier) =>
       _advance('POST', '/v1/client/sign_ins', {'identifier': identifier});
+
+  /// Continue an attempt the server holds at `needs_policy_acceptance`
+  /// (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+  /// [PolicyAcceptanceController.build] made; the proof is the attempt's
+  /// one-time policy token. Returns the next step: usually [FlowDone], or
+  /// [AcceptPolicies] again when a newer version was published meanwhile.
+  Future<FlowStep> acceptPolicies(List<PolicyAcceptance> acceptances) => _advance(
+        'POST',
+        '/v1/client/sign_ins/$_id/accept_policies',
+        acceptPoliciesBody(acceptances, _attempt?.policyAcceptanceToken),
+      );
+
+  /// Start the attempt from a provider id_token (`POST /v1/client/sign_ins/id_token`)
+  /// and keep it in the flow, so a native sign-in the server holds for a further
+  /// step (`needs_policy_acceptance`, a second factor) can be continued. See
+  /// [AtlasClient.signInWithIdToken] for the one-shot form.
+  Future<FlowStep> startWithIdToken({
+    required String provider,
+    required String idToken,
+    String? nonce,
+  }) =>
+      _advance('POST', '/v1/client/sign_ins/id_token', {
+        'provider': provider,
+        'id_token': idToken,
+        if (nonce != null) 'nonce': nonce,
+      });
 
   /// §5.3 send a first-factor code or magic link
   /// (`POST …/:id/prepare_first_factor`). [strategy] is `email_code`,
@@ -372,7 +416,10 @@ class SignUpFlow {
 
   /// Create the sign-up attempt (`POST /v1/client/sign_ups`). [fields] are the
   /// tenant's configured extra fields; [consent] satisfies a required legal
-  /// agreement; [organizationId] seats a reader-pool sign-up.
+  /// agreement; [organizationId] seats a reader-pool sign-up. [policyAcceptances]
+  /// are the policies the user accepted ([PolicyAcceptanceController.build]); an
+  /// instance with required policies answers 422 `POLICY_ACCEPTANCE_REQUIRED`
+  /// without them.
   Future<FlowStep> create({
     required String email,
     required String password,
@@ -380,8 +427,12 @@ class SignUpFlow {
     bool? consent,
     String? organizationId,
     String? captchaToken,
+    List<PolicyAcceptance>? policyAcceptances,
   }) =>
       _advance('POST', '/v1/client/sign_ups', {
+        if (policyAcceptances != null && policyAcceptances.isNotEmpty)
+          'policy_acceptances':
+              policyAcceptances.map((a) => a.toJson()).toList(growable: false),
         'email': email,
         'password': password,
         if (fields != null) 'fields': fields,
@@ -389,6 +440,17 @@ class SignUpFlow {
         if (organizationId != null) 'organization_id': organizationId,
         if (captchaToken != null) 'captcha_token': captchaToken,
       });
+
+  /// Continue an attempt the server holds at `needs_policy_acceptance`
+  /// (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+  /// [PolicyAcceptanceController.build] made; the proof is the attempt's
+  /// one-time policy token. Returns the next step: usually [FlowDone], or
+  /// [AcceptPolicies] again when a newer version was published meanwhile.
+  Future<FlowStep> acceptPolicies(List<PolicyAcceptance> acceptances) => _advance(
+        'POST',
+        '/v1/client/sign_ins/$_id/accept_policies',
+        acceptPoliciesBody(acceptances, _attempt?.policyAcceptanceToken),
+      );
 
   /// (Re)send the verification email (`POST …/:id/prepare_verification`).
   Future<FlowStep> prepareVerification() =>
@@ -452,6 +514,17 @@ class PasswordResetFlow {
         'email_address': email,
         if (captchaToken != null) 'captcha_token': captchaToken,
       });
+
+  /// Continue an attempt the server holds at `needs_policy_acceptance`
+  /// (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+  /// [PolicyAcceptanceController.build] made; the proof is the attempt's
+  /// one-time policy token. Returns the next step: usually [FlowDone], or
+  /// [AcceptPolicies] again when a newer version was published meanwhile.
+  Future<FlowStep> acceptPolicies(List<PolicyAcceptance> acceptances) => _advance(
+        'POST',
+        '/v1/client/sign_ins/$_id/accept_policies',
+        acceptPoliciesBody(acceptances, _attempt?.policyAcceptanceToken),
+      );
 
   /// Submit the emailed [code] (`POST …/:id/attempt_verification`).
   Future<FlowStep> attemptVerification(String code) => _advance(
@@ -536,14 +609,29 @@ class PasskeySignUpFlow {
     Map<String, String>? fields,
     bool? consent,
     String? captchaToken,
+    List<PolicyAcceptance>? policyAcceptances,
   }) =>
       _advance('POST', '/v1/client/sign_ups/passkey', {
+        if (policyAcceptances != null && policyAcceptances.isNotEmpty)
+          'policy_acceptances':
+              policyAcceptances.map((a) => a.toJson()).toList(growable: false),
         if (email != null && email.isNotEmpty) 'email': email,
         if (username != null && username.isNotEmpty) 'username': username,
         if (fields != null && fields.isNotEmpty) 'fields': fields,
         if (consent == true) 'consent': true,
         if (captchaToken != null && captchaToken.isNotEmpty) 'captcha_token': captchaToken,
       });
+
+  /// Continue an attempt the server holds at `needs_policy_acceptance`
+  /// (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+  /// [PolicyAcceptanceController.build] made; the proof is the attempt's
+  /// one-time policy token (else this sign-up's poll secret). Returns the next step: usually [FlowDone], or
+  /// [AcceptPolicies] again when a newer version was published meanwhile.
+  Future<FlowStep> acceptPolicies(List<PolicyAcceptance> acceptances) => _advance(
+        'POST',
+        '/v1/client/sign_ins/${Uri.encodeComponent(_attempt?.id ?? '')}/accept_policies',
+        acceptPoliciesBody(acceptances, _attempt?.policyAcceptanceToken, _pollSecret),
+      );
 
   /// Submit the emailed verification code (when the instance requires a verified email).
   Future<FlowStep> attemptVerification(String code) => _advance(

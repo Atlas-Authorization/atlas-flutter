@@ -35,10 +35,20 @@ class SignInAttempt {
     this.authorizationUrl,
     this.ticket,
     this.expiresAt,
+    this.pendingPolicies,
+    this.policyAcceptanceToken,
   });
 
   final String id;
   final String status;
+
+  /// While the attempt is held at `needs_policy_acceptance`: the policies still
+  /// to accept (raw wire objects; read them with `pendingPoliciesOf`).
+  final List<Map<String, dynamic>>? pendingPolicies;
+
+  /// The one-time proof that goes with `accept_policies`; returned once, with the
+  /// held status.
+  final String? policyAcceptanceToken;
 
   /// The identifier the attempt was started with; `null` before one is
   /// collected.
@@ -81,6 +91,13 @@ class SignInAttempt {
       authorizationUrl: _as<String>(json['authorization_url']),
       ticket: _as<String>(json['ticket']),
       expiresAt: _as<int>(json['expires_at']),
+      pendingPolicies: json['pending_policies'] is List
+          ? (json['pending_policies'] as List)
+              .whereType<Map>()
+              .map((e) => e.cast<String, dynamic>())
+              .toList(growable: false)
+          : null,
+      policyAcceptanceToken: _as<String>(json['policy_acceptance_token']),
     );
   }
 
@@ -96,6 +113,9 @@ class SignInAttempt {
         if (authorizationUrl != null) 'authorization_url': authorizationUrl,
         if (ticket != null) 'ticket': ticket,
         if (expiresAt != null) 'expires_at': expiresAt,
+        if (pendingPolicies != null) 'pending_policies': pendingPolicies,
+        if (policyAcceptanceToken != null)
+          'policy_acceptance_token': policyAcceptanceToken,
       };
 }
 

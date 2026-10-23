@@ -303,6 +303,42 @@ flutter:
 Or map a catalog id to any family you load yourself (e.g. `google_fonts`):
 `AtlasSignIn(fonts: {'inter': GoogleFonts.inter().fontFamily!}, …)`.
 
+## Policy acceptance (terms of service, privacy)
+
+When the app defines policies in the Atlas dashboard, sign-up must carry the user's acceptance and sign-in can be held until a newer version is accepted. The SDK covers both, with prebuilt widgets or a headless controller.
+
+```dart
+// Sign-up: show the policies, send what the user accepted.
+final policies = await atlas.signUpPolicyController();
+// in build():
+AtlasPolicyConsent(controller: policies),          // checkbox + in-app document viewer
+FilledButton(
+  onPressed: policies.canSubmit() ? () async {
+    // `scroll` policies are read in an unskippable dialog first.
+    final declined = await runScrollPolicies(context, policies);
+    if (declined != null) return;                   // the user declined it
+    await atlas.createSignUp().create(
+      email: email, password: password, policyAcceptances: policies.build());
+  } : null,
+  child: const Text('Create account'),
+),
+AtlasPolicyClickwrap(controller: policies),        // "By continuing you agree to ..."
+```
+
+If the server answers 422 `POLICY_ACCEPTANCE_REQUIRED` (a policy changed while the form was open), call `atlas.refreshPoliciesOnRequired(controller, error)` to reload what is needed now.
+
+A sign-in the server holds returns the `AcceptPolicies` step. `AtlasSignIn` shows it for you; with the flow driver:
+
+```dart
+final step = await flow.attemptPassword(password);
+if (step is AcceptPolicies) {
+  final controller = await atlas.policyController(flow.attempt);   // fills in the content
+  // show AtlasPolicyAcceptStep(controller: controller, onAccept: flow.acceptPolicies, onDecline: ...)
+}
+```
+
+A sign-in that returns through a web-auth or custom-tab redirect carries the proof in the URL: `AtlasRedirectResult.parse(url)` then `atlas.resumeSignIn(redirect)` gives a flow you can `acceptPolicies` on. For a signed-in user whose policies changed, put `AtlasPolicyGate(client: atlas)` on a screen: it draws the banner and the re-acceptance dialog.
+
 ## Native id_token sign-in — new in **0.4.0**
 
 Exchange a provider **id_token** (Google GSI / One-Tap, Apple, Facebook Limited

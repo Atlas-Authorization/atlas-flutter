@@ -6,6 +6,7 @@ import '../design.dart';
 import '../models.dart';
 import 'auth_state.dart';
 import 'design_style.dart';
+import 'policy_widgets.dart';
 
 /// A prebuilt, self-driving sign-in widget.
 ///
@@ -86,6 +87,9 @@ class _AtlasSignInState extends State<AtlasSignIn> {
 
   FlowStep _step = const CollectIdentifier();
   MfaEnrollment? _enrollment;
+
+  /// The policies a held attempt waits on ([AcceptPolicies]).
+  PolicyAcceptanceController? _policies;
   bool _busy = false;
   String? _error;
 
@@ -148,6 +152,12 @@ class _AtlasSignInState extends State<AtlasSignIn> {
     try {
       final step = await op();
       if (!mounted) return;
+      if (step is AcceptPolicies) {
+        // Fill in the content the attempt only listed.
+        final controller = await widget.client.policyController(_flow.attempt);
+        if (!mounted) return;
+        _policies = controller;
+      }
       setState(() => _step = step);
       if (step is FlowDone) await _finish();
     } on AtlasException catch (e) {
@@ -393,6 +403,28 @@ class _AtlasSignInState extends State<AtlasSignIn> {
         Text('Finishing sign-in…',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium),
+      ];
+    }
+    if (step is AcceptPolicies) {
+      final policies = _policies;
+      if (policies == null) {
+        return [const Center(child: CircularProgressIndicator())];
+      }
+      return [
+        AtlasPolicyAcceptStep(
+          controller: policies,
+          enabled: !_busy,
+          onAccept: (acceptances) => _guard(() => _flow.acceptPolicies(acceptances)),
+          onDecline: () {
+            // Declining abandons the held attempt: back to the first step, with the reason.
+            final names = joinPolicyTitles(policies.policies.map((p) => p.title).toList(), 'and');
+            setState(() {
+              _step = const CollectIdentifier();
+              _error = fillPolicyTemplate(const AtlasPolicyStrings().declined, {'policy': names});
+              _errorCode = null;
+            });
+          },
+        ),
       ];
     }
     if (step is FlowDone) {
