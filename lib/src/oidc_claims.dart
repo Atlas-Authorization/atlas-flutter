@@ -53,6 +53,8 @@ class OidcClaims {
     this.orgPermissions = const [],
     this.orgs = const [],
     this.sso,
+    this.ssoOrganizationId,
+    this.ssoConnectionType,
   });
 
   final String? orgId;
@@ -61,6 +63,12 @@ class OidcClaims {
   final List<String> orgPermissions;
   final List<OidcOrganization> orgs;
   final OidcSso? sso;
+
+  /// `sso_organization_id`: the Atlas organization that owns the SSO connection (independent of `org_id`).
+  final String? ssoOrganizationId;
+
+  /// `sso_connection_type`: `saml` or `oidc`; absent on a non-SSO sign-in.
+  final String? ssoConnectionType;
 
   static String? _str(Object? v) => v is String ? v : null;
 
@@ -96,6 +104,8 @@ class OidcClaims {
               issuer: _str(claims['sso_issuer']),
               domain: _str(claims['sso_domain']),
             ),
+      ssoOrganizationId: _str(claims['sso_organization_id']),
+      ssoConnectionType: _str(claims['sso_connection_type']),
     );
   }
 

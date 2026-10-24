@@ -149,7 +149,7 @@ void main() {
       final claims = OidcClaims.fromClaims(jsonDecode(
         '{"org_id":"org_1","org_slug":"acme","org_role":"admin","org_permissions":["a:b","c:d"],'
         '"orgs":[{"id":"org_1","slug":"acme","role":"admin"},{"id":"org_2","slug":"b","role":"member"},{"slug":"skipped"}],'
-        '"sso_connection_id":"sso_9","sso_tenant_id":"tid","sso_issuer":"https://login.example","sso_domain":"acme.com"}',
+        '"sso_connection_id":"sso_9","sso_tenant_id":"tid","sso_issuer":"https://login.example","sso_domain":"acme.com","sso_organization_id":"org_7","sso_connection_type":"saml"}',
       ) as Map<String, dynamic>);
       expect(claims.orgId, 'org_1');
       expect(claims.orgRole, 'admin');
@@ -158,9 +158,13 @@ void main() {
       expect(claims.orgs[1].role, 'member');
       expect(claims.sso?.connectionId, 'sso_9');
       expect(claims.sso?.domain, 'acme.com');
+      expect(claims.ssoOrganizationId, 'org_7');
+      expect(claims.ssoConnectionType, 'saml');
       final none = OidcClaims.fromClaims({'sub': 'u'});
       expect(none.orgId, isNull);
       expect(none.sso, isNull);
+      expect(none.ssoOrganizationId, isNull);
+      expect(none.ssoConnectionType, isNull);
       expect(none.orgs, isEmpty);
     });
 
