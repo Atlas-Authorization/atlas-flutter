@@ -10,22 +10,53 @@ class AtlasErrorItem {
     required this.code,
     required this.message,
     this.param,
+    this.meta,
+    this.didYouMean = const [],
+    this.allowedMethods = const [],
+    this.docsUrl,
   });
 
   final String code;
   final String message;
   final String? param;
 
-  factory AtlasErrorItem.fromJson(Map<String, dynamic> json) => AtlasErrorItem(
-        code: json['code'] as String? ?? '',
-        message: json['message'] as String? ?? '',
-        param: json['param'] as String?,
-      );
+  /// Structured detail some errors carry (e.g. `meta.required_scope` on
+  /// `INSUFFICIENT_SCOPE`).
+  final Map<String, dynamic>? meta;
+
+  /// `ROUTE_NOT_FOUND` only: the closest documented paths.
+  final List<String> didYouMean;
+
+  /// `ROUTE_NOT_FOUND` only: the methods the path does support.
+  final List<String> allowedMethods;
+
+  /// Where the error code is documented (`https://atlasauth.net/errors/<code>`).
+  final String? docsUrl;
+
+  static List<String> _strings(Object? v) =>
+      v is List ? v.whereType<String>().toList(growable: false) : const [];
+
+  factory AtlasErrorItem.fromJson(Map<String, dynamic> json) {
+    final meta = json['meta'];
+    return AtlasErrorItem(
+      code: json['code'] as String? ?? '',
+      message: json['message'] as String? ?? '',
+      param: json['param'] as String?,
+      meta: meta is Map ? meta.cast<String, dynamic>() : null,
+      didYouMean: _strings(json['did_you_mean']),
+      allowedMethods: _strings(json['allowed_methods']),
+      docsUrl: json['docs_url'] as String?,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'code': code,
         'message': message,
         if (param != null) 'param': param,
+        if (meta != null) 'meta': meta,
+        if (didYouMean.isNotEmpty) 'did_you_mean': didYouMean,
+        if (allowedMethods.isNotEmpty) 'allowed_methods': allowedMethods,
+        if (docsUrl != null) 'docs_url': docsUrl,
       };
 
   @override
@@ -69,7 +100,22 @@ enum AtlasErrorCode {
   captchaFailed('CAPTCHA_FAILED'),
 
   /// 403 — the step needs a challenge but no captcha provider is configured.
-  challengeUnavailable('CHALLENGE_UNAVAILABLE');
+  challengeUnavailable('CHALLENGE_UNAVAILABLE'),
+
+  /// 403 — the key or token lacks a scope; `meta.required_scope` names it.
+  insufficientScope('INSUFFICIENT_SCOPE'),
+
+  /// The pre-2026-10 spelling of [insufficientScope]; still tolerated.
+  scopeMissing('SCOPE_MISSING'),
+
+  /// 403 — the request origin is not one the key or app allows.
+  originNotAllowed('ORIGIN_NOT_ALLOWED'),
+
+  /// 403 — a recent MFA / re-authentication is required first.
+  stepUpRequired('STEP_UP_REQUIRED'),
+
+  /// 404 — no such method + path; carries `did_you_mean` / `allowed_methods`.
+  routeNotFound('ROUTE_NOT_FOUND');
 
   const AtlasErrorCode(this.wire);
 
@@ -198,6 +244,47 @@ class AtlasException implements Exception {
   /// (`CAPTCHA_FAILED`): run the captcha and retry with its token.
   bool get isCaptchaRequired =>
       knownCode == AtlasErrorCode.captchaRequired || knownCode == AtlasErrorCode.captchaFailed;
+
+  /// 403 `INSUFFICIENT_SCOPE`: the key or token lacks a scope. The older
+  /// `SCOPE_MISSING` spelling is still tolerated. [requiredScope] names the scope.
+  bool get isInsufficientScope =>
+      knownCode == AtlasErrorCode.insufficientScope || knownCode == AtlasErrorCode.scopeMissing;
+
+  /// The scope an `INSUFFICIENT_SCOPE` refusal asks for (`meta.required_scope`);
+  /// null otherwise.
+  String? get requiredScope {
+    for (final item in errors) {
+      final scope = item.meta?['required_scope'];
+      if (scope is String) return scope;
+    }
+    return null;
+  }
+
+  /// 403 `STEP_UP_REQUIRED`: a recent re-authentication (MFA) is needed; run it
+  /// and retry.
+  bool get isStepUpRequired => knownCode == AtlasErrorCode.stepUpRequired;
+
+  /// 403 `ORIGIN_NOT_ALLOWED`: the request came from an origin the key or app
+  /// does not allow.
+  bool get isOriginNotAllowed => knownCode == AtlasErrorCode.originNotAllowed;
+
+  /// 404 `ROUTE_NOT_FOUND`: no such method + path (a missing object is
+  /// `NOT_FOUND`).
+  bool get isRouteNotFound => knownCode == AtlasErrorCode.routeNotFound;
+
+  AtlasErrorItem? get _routeNotFoundItem {
+    for (final item in errors) {
+      if (item.code == AtlasErrorCode.routeNotFound.wire) return item;
+    }
+    return null;
+  }
+
+  /// `ROUTE_NOT_FOUND`: the closest documented paths; empty for any other error.
+  List<String> get didYouMean => _routeNotFoundItem?.didYouMean ?? const [];
+
+  /// `ROUTE_NOT_FOUND`: the methods the path does support; empty for any other
+  /// error.
+  List<String> get allowedMethods => _routeNotFoundItem?.allowedMethods ?? const [];
 
   /// A human-readable message, always non-null so it can go straight to a UI.
   String get message {

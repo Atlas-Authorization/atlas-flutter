@@ -22,6 +22,7 @@ export 'src/atlas_exception.dart';
 export 'src/design.dart';
 export 'src/models.dart';
 export 'src/native_session.dart';
+export 'src/oidc_claims.dart';
 export 'src/passkeys.dart';
 export 'src/policy_html.dart';
 export 'src/token_store.dart';

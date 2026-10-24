@@ -13,6 +13,7 @@ import 'secure_token_store.dart';
 import 'token_store.dart';
 
 part 'flows.dart';
+part 'integrations.dart';
 part 'policies.dart';
 
 /// Cookie names the server sets (mirrors the API's `COOKIE_NAMES`).
@@ -20,6 +21,12 @@ class _Cookie {
   static const String session = '__session';
   static const String refresh = '__atlas_rt';
 }
+
+/// A key a client SDK must never hold: a secret (`sk_`), platform (`psk_`) or
+/// dashboard (`dsk_`) key, in the legacy `sk_...` form or the
+/// `atlas_<env>_<kind>_...` form. The publishable forms (`pk_...`,
+/// `atlas_<env>_pk_...`) pass.
+final RegExp _secretKeyPattern = RegExp(r'^(?:atlas_[a-z0-9]+_)?(?:sk|psk|dsk)_');
 
 /// The Atlas FAPI client — the client-facing auth core for a Flutter app.
 ///
@@ -41,8 +48,8 @@ class _Cookie {
 /// flows. What it does, it does to the letter of the server contract.
 ///
 /// A client SDK authenticates with a **publishable key** (`pk_...`) and a
-/// session token — never the secret key. Passing an `sk_...` key is a
-/// programming error and throws [ArgumentError].
+/// session token — never the secret key. Passing an `sk_...` (or
+/// `atlas_<env>_sk_...`) key is a programming error and throws [ArgumentError].
 class AtlasClient {
   /// - [publishableKey]: the instance's `pk_...` publishable key. Sent as
   ///   `x-publishable-key` on every request.
@@ -68,13 +75,14 @@ class AtlasClient {
         tokenStore = tokenStore ?? SecureTokenStore(account: publishableKey),
         _http = httpClient ?? http.Client(),
         _passkeyAuthenticator = passkeyAuthenticator {
-    if (publishableKey.startsWith('sk_')) {
+    if (_secretKeyPattern.hasMatch(publishableKey)) {
       // A client SDK must never hold the secret key. Fail loudly rather than
       // ship it to the frontend API.
       throw ArgumentError.value(
         publishableKey,
         'publishableKey',
-        'Expected a publishable key (pk_...), not a secret key (sk_...). '
+        'Expected a publishable key (pk_... or atlas_<env>_pk_...), not a '
+            'secret key (sk_... or atlas_<env>_sk_...). '
             'A client SDK never uses the secret key.',
       );
     }
@@ -979,10 +987,12 @@ class AtlasClient {
     String path, {
     Object? body,
     String? cookie,
+    Map<String, String>? extraHeaders,
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'x-publishable-key': publishableKey};
     if (cookie != null) headers['Cookie'] = cookie;
+    if (extraHeaders != null) headers.addAll(extraHeaders);
     String? encoded;
     final stamped = stampDeviceId(method, path, body, deviceIdProvider);
     if (stamped != null) {

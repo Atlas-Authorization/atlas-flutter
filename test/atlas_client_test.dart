@@ -108,6 +108,15 @@ void main() {
     );
   });
 
+  test('rejects a secret key in the current format', () {
+    for (final key in ['atlas_test_sk_0123456789abcdefghijABCDEFGHIJ0123', 'atlas_live_psk_0123456789abcdefghijABCDEFGHIJ0123']) {
+      expect(
+        () => AtlasClient(publishableKey: key, frontendApi: frontendApi),
+        throwsArgumentError,
+      );
+    }
+  });
+
   test('every request carries the publishable key and hits the base URL', () async {
     transport
       ..enqueue(201, '{"id":"sia_1","status":"needs_first_factor"}')
