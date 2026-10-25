@@ -6,6 +6,26 @@ part of 'atlas_client.dart';
 
 String _integrationSeg(String value) => Uri.encodeComponent(value);
 
+/// The query string for a per-call audience (and any extra parameters):
+/// `?a=b&...`, or an empty string when there is nothing to send.
+String _integrationQuery({
+  String? spaceId,
+  String? cbid,
+  String? audience,
+  Map<String, String> audienceParams = const {},
+}) {
+  final parts = <String>[];
+  if (spaceId != null && spaceId.isNotEmpty) parts.add('space_id=${_integrationSeg(spaceId)}');
+  final keys = audienceParams.keys.toList()..sort();
+  for (final key in keys) {
+    final value = audienceParams[key];
+    if (value != null && value.isNotEmpty) parts.add('${_integrationSeg(key)}=${_integrationSeg(value)}');
+  }
+  if (cbid != null && cbid.isNotEmpty) parts.add('cbid=${_integrationSeg(cbid)}');
+  if (audience != null && audience.isNotEmpty) parts.add('audience=${_integrationSeg(audience)}');
+  return parts.isEmpty ? '' : '?${parts.join('&')}';
+}
+
 /// A short-lived token for a configured identity integration — what
 /// [AtlasIntegrations.getToken] resolves. Any service that verifies the user
 /// with a JWT (the built-in presets `chatly`, `forumulate`, `cookiemunch`,
@@ -99,12 +119,30 @@ extension AtlasIntegrations on AtlasClient {
   ///
   /// - [integration]: the integration id (a preset such as `chatly`, or a custom id).
   /// - [spaceId]: Forumulate preset only — the space to mint the reader token for.
-  Future<IntegrationToken?> getToken(String integration, {String? spaceId}) async {
+  /// - [cbid]: the per-call audience value for an integration whose
+  ///   `per_call_audience` is keyed on `cbid`.
+  /// - [audience]: the full audience to request; it must match the integration's
+  ///   per-call audience template or allow-list.
+  /// - [audienceParams]: extra named values for a per-call audience template
+  ///   (for example `{'tenant': 't2'}`).
+  ///
+  /// An integration with a per-call audience mints a token only when the call
+  /// supplies a matching value; otherwise no token is minted.
+  Future<IntegrationToken?> getToken(
+    String integration, {
+    String? spaceId,
+    String? cbid,
+    String? audience,
+    Map<String, String> audienceParams = const {},
+  }) async {
     final stored = await tokenStore.load();
     if (stored == null) throw AtlasException.notSignedIn();
-    final query = (spaceId == null || spaceId.isEmpty)
-        ? ''
-        : '?space_id=${_integrationSeg(spaceId)}';
+    final query = _integrationQuery(
+      spaceId: spaceId,
+      cbid: cbid,
+      audience: audience,
+      audienceParams: audienceParams,
+    );
     try {
       final json = await _authedJson(
         'POST',
@@ -135,6 +173,9 @@ extension AtlasIntegrations on AtlasClient {
     String accessToken, {
     String? origin,
     String? dpopProof,
+    String? cbid,
+    String? audience,
+    Map<String, String> audienceParams = const {},
   }) async {
     final headers = <String, String>{
       if (dpopProof != null) 'Authorization': 'DPoP $accessToken' else 'Authorization': 'Bearer $accessToken',
@@ -143,7 +184,8 @@ extension AtlasIntegrations on AtlasClient {
     };
     final response = await _send(
       'POST',
-      '/v1/client/integrations/${_integrationSeg(integration)}/atlas_id_tokens?publishable_key=${_integrationSeg(publishableKey)}',
+      '/v1/client/integrations/${_integrationSeg(integration)}/atlas_id_tokens?publishable_key=${_integrationSeg(publishableKey)}'
+      '${_integrationQuery(cbid: cbid, audience: audience, audienceParams: audienceParams).replaceFirst('?', '&')}',
       extraHeaders: headers,
     );
     if (response.statusCode == 404) return null;

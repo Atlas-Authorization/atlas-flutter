@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0 — 2026-10-25
+
+### Added
+
+- **Per-call audience on integration tokens.** `getToken(integration, spaceId:, cbid:, audience:, audienceParams:)` accepts `cbid`, `audience` and `audienceParams`, so one integration can mint a token whose `aud` is chosen per call (for an integration configured with a per-call audience, such as one audience per site). The same options are available on the Sign in with Atlas token route. An integration with a per-call audience mints a token only when the call supplies a matching value.
+
 ## 0.10.0 — 2026-10-24
 
 ### Added

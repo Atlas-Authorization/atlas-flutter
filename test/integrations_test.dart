@@ -63,6 +63,14 @@ void main() {
       expect(transport.reqAt(0).url.query, 'space_id=s%201');
     });
 
+    test('sends the per-call audience', () async {
+      transport.enqueue(200, '{"jwt":"j","expires_in":60,"integration":"acme","audience":"acme:dv-1"}');
+      final token = await client().getToken('acme',
+          cbid: 'dv 1', audience: 'acme:dv-1', audienceParams: {'tenant': 't2'});
+      expect(token!.audience, 'acme:dv-1');
+      expect(transport.reqAt(0).url.query, 'tenant=t2&cbid=dv%201&audience=acme%3Adv-1');
+    });
+
     test('is null when the integration is not enabled', () async {
       transport.enqueue(404, '{"errors":[{"code":"NOT_FOUND","message":"nope"}]}');
       expect(await client().getToken('chatly'), isNull);
