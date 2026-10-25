@@ -1,0 +1,19 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.5"
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
