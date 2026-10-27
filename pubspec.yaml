@@ -32,3 +32,14 @@ dev_dependencies:
     sdk: flutter
   # package:http ships MockClient under package:http/testing.dart — no extra dep.
   flutter_lints: ^4.0.0
+
+flutter:
+  # Native half of device-bound biometric sign-in (Secure Enclave / Android
+  # Keystore); the rest of the package is pure Dart.
+  plugin:
+    platforms:
+      android:
+        package: net.atlasauth.atlas_auth
+        pluginClass: AtlasDeviceKeyPlugin
+      ios:
+        pluginClass: AtlasDeviceKeyPlugin

@@ -173,7 +173,7 @@ void main() {
     expect(transport.bodyAt(2)['ticket'], 'tk_9');
 
     // Token stored: the JWT from the exchange and the refresh cookie captured.
-    final stored = await store.load();
+    final stored = store.load();
     expect(stored, isNotNull);
     expect(stored!.token, 'jwt_final');
     expect(stored.refreshToken, 'rt_final');
@@ -285,7 +285,7 @@ void main() {
     expect(rotated.token, 'jwt_new');
     expect(rotated.refreshToken, 'rt_new');
     expect(transport.recorded[0].url.path, '/v1/client/sessions/sess_1/tokens');
-    expect((await store.load())?.token, 'jwt_new');
+    expect(store.load()?.token, 'jwt_new');
   });
 
   // MARK: sign-out clears storage even on network failure
@@ -298,7 +298,7 @@ void main() {
     // be cleared.
     final client = makeClient(store: store);
     await client.signOut();
-    expect(await store.load(), isNull);
+    expect(store.load(), isNull);
   });
 
   test('hasSession reflects the store', () async {
@@ -315,14 +315,14 @@ void main() {
 
   test('InMemoryTokenStore round-trips', () async {
     final TokenStore store = InMemoryTokenStore();
-    expect(await store.load(), isNull);
+    expect(store.load(), isNull);
 
     const session = AtlasSession(sessionId: 'sess_1', token: 'jwt', refreshToken: 'rt');
     await store.save(session);
-    expect(await store.load(), session);
+    expect(store.load(), session);
 
     await store.clear();
-    expect(await store.load(), isNull);
+    expect(store.load(), isNull);
   });
 
   test('AtlasSession JSON round-trips (guards the secure-store shape)', () {

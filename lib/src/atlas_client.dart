@@ -5,7 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart' as launcher;
 
 import 'atlas_exception.dart';
+import 'attestation.dart';
 import 'design.dart';
+import 'device_key.dart';
 import 'models.dart';
 import 'passkeys.dart';
 import 'policy_html.dart';
@@ -95,6 +97,12 @@ class AtlasClient {
   /// to read your own persistent storage to keep the id across launches, or
   /// return null to send none.
   String? Function() deviceIdProvider = _processDeviceId;
+
+  /// App and device attestation (App Attest / Play Integrity). When set, sign-up,
+  /// sign-in and SMS-send requests fetch a single-use nonce, call this with it,
+  /// and send the proof as `Atlas-Attestation`. Needed once the instance turns
+  /// on `attackProtection.appAttestation`.
+  Future<AtlasAttestationProof> Function(String nonce)? attestationProvider;
 
   /// Opens the logout URL [signOut] hands back — the upstream OIDC provider's
   /// end-session URL, or the SAML Single Logout start URL — so the user is
@@ -776,6 +784,79 @@ class AtlasClient {
     return currentUser();
   }
 
+  /// Registers this device's key for the signed-in user (needs a recent
+  /// re-authentication and `accountUx.deviceKeys.enabled`). Keep the returned
+  /// [AtlasDeviceKey.id] and pass it to [signInWithDeviceKey]. [instanceId] is
+  /// your instance id (`ins_...`), shown in the dashboard.
+  Future<AtlasDeviceKey> registerDeviceKey({
+    required String instanceId,
+    AtlasDeviceKeySigner? signer,
+    String? label,
+    bool biometric = true,
+    String platform = 'other',
+  }) async {
+    final s = signer ?? MethodChannelDeviceKeySigner();
+    final challenge = await _authedJson('POST', '/v1/client/me/device_keys/challenge', body: const <String, String>{});
+    final nonce = challenge['nonce'] as String;
+    final jwk = await s.createKey(biometric: biometric);
+    // Proof of possession: the register message names the key by its x coordinate.
+    final signature = await s.sign(atlasDeviceKeyMessage(purpose: 'register', instanceId: instanceId, keyId: jwk.x, nonce: nonce));
+    final json = await _authedJson('POST', '/v1/client/me/device_keys', body: {
+      'nonce': nonce,
+      'public_key': jwk.toJson(),
+      'signature': signature,
+      'biometric_bound': biometric,
+      'platform': platform,
+      if (label != null && label.isNotEmpty) 'label': label,
+    });
+    return AtlasDeviceKey.fromJson(json);
+  }
+
+  /// The signed-in user's device keys.
+  Future<List<AtlasDeviceKey>> listDeviceKeys() async {
+    final json = await _authedJson('GET', '/v1/client/me/device_keys');
+    return (json['data'] as List<dynamic>? ?? const [])
+        .map((e) => AtlasDeviceKey.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Removes one device key (needs a recent re-authentication).
+  Future<void> removeDeviceKey(String id) async {
+    await _authedJson('DELETE', '/v1/client/me/device_keys/$id');
+  }
+
+  /// Signs in with a registered device key (biometric prompt) and persists the
+  /// session. A sign-in that still owes a second factor throws an
+  /// [AtlasException] carrying the status.
+  Future<AtlasUser> signInWithDeviceKey({
+    required String instanceId,
+    required String deviceKeyId,
+    AtlasDeviceKeySigner? signer,
+  }) async {
+    final s = signer ?? MethodChannelDeviceKeySigner();
+    final challenge = await _postJson('/v1/client/sign_ins/device_key/challenge', {'device_key_id': deviceKeyId});
+    final nonce = challenge['nonce'] as String;
+    final signature = await s.sign(atlasDeviceKeyMessage(purpose: 'sign_in', instanceId: instanceId, keyId: deviceKeyId, nonce: nonce));
+    final response = await _send('POST', '/v1/client/sign_ins/device_key/finish',
+        body: {'device_key_id': deviceKeyId, 'nonce': nonce, 'signature': signature});
+    _throwIfError(response);
+    final decoded = _decode(response);
+    final attempt = SignInAttempt.fromJson(decoded);
+    if (!attempt.isComplete) {
+      throw AtlasException.api(
+        status: 200,
+        errors: [AtlasErrorItem(code: 'sign_in_not_complete', message: 'Sign-in needs an additional step: ${attempt.status}.')],
+      );
+    }
+    final tokens = SessionTokens.fromJson(decoded);
+    await tokenStore.save(AtlasSession(
+      sessionId: attempt.createdSessionId ?? tokens.resolvedSessionId ?? '',
+      token: tokens.jwt,
+      refreshToken: _extractCookie(_Cookie.refresh, response),
+    ));
+    return currentUser();
+  }
+
   /// The signed-in user (`GET /v1/client/me`). Presents the stored refresh
   /// cookie for authentication; throws an [AtlasException] of kind
   /// [AtlasErrorKind.notSignedIn] when there is no session.
@@ -993,6 +1074,16 @@ class AtlasClient {
     final headers = <String, String>{'x-publishable-key': publishableKey};
     if (cookie != null) headers['Cookie'] = cookie;
     if (extraHeaders != null) headers.addAll(extraHeaders);
+    final provider = attestationProvider;
+    if (provider != null && isAttestationGuarded(method, path)) {
+      try {
+        final challenge = await _send('POST', '/v1/client/attestation/challenge', body: <String, dynamic>{});
+        final nonce = (jsonDecode(challenge.body) as Map<String, dynamic>)['nonce'] as String?;
+        if (nonce != null) headers['Atlas-Attestation'] = (await provider(nonce)).toHeader(nonce);
+      } on AtlasException {
+        // No nonce: send unattested and let the server decide.
+      }
+    }
     String? encoded;
     final stamped = stampDeviceId(method, path, body, deviceIdProvider);
     if (stamped != null) {

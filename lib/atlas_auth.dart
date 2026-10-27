@@ -18,8 +18,10 @@
 library atlas_auth;
 
 export 'src/atlas_client.dart';
+export 'src/attestation.dart';
 export 'src/atlas_exception.dart';
 export 'src/design.dart';
+export 'src/device_key.dart';
 export 'src/models.dart';
 export 'src/native_session.dart';
 export 'src/oidc_claims.dart';
