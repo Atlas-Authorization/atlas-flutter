@@ -1,0 +1,33 @@
+group 'net.atlasauth.atlas_auth'
+version '1.0'
+
+buildscript {
+    ext.kotlin_version = '1.9.24'
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+rootProject.allprojects {
+    repositories { google(); mavenCentral() }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'net.atlasauth.atlas_auth'
+    compileSdk 34
+    defaultConfig { minSdk 24 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions { jvmTarget = '1.8' }
+}
+
+dependencies {
+    implementation 'androidx.biometric:biometric:1.1.0'
+}

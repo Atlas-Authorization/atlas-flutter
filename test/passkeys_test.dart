@@ -316,7 +316,7 @@ void main() {
     expect(transport.recorded[0].headers.containsKey('cookie'), isFalse);
 
     // Session persisted from the exchange.
-    final stored = await store.load();
+    final stored = store.load();
     expect(stored?.token, 'jwt_abc');
     expect(stored?.refreshToken, 'rt_xyz');
 

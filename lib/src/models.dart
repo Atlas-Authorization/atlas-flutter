@@ -294,19 +294,37 @@ class ExternalAccount {
 }
 
 class Passkey {
-  const Passkey({required this.id, this.name});
+  const Passkey({required this.id, this.name, this.authenticatorName, this.authenticatorIcon});
 
   final String id;
   final String? name;
 
-  factory Passkey.fromJson(Map<String, dynamic> json) => Passkey(
-        id: _as<String>(json['id']) ?? '',
-        name: _as<String>(json['name']),
-      );
+  /// The authenticator model's name from the FIDO Metadata Service, when the
+  /// instance turns on `passkeyPolicy.mds` and the model is known.
+  final String? authenticatorName;
+
+  /// The authenticator model's icon as a `data:image/…` URI, when known.
+  final String? authenticatorIcon;
+
+  factory Passkey.fromJson(Map<String, dynamic> json) {
+    final authenticator = json['authenticator'];
+    final a = authenticator is Map ? authenticator.cast<String, dynamic>() : const <String, dynamic>{};
+    return Passkey(
+      id: _as<String>(json['id']) ?? '',
+      name: _as<String>(json['name']),
+      authenticatorName: _as<String>(a['name']),
+      authenticatorIcon: _as<String>(a['icon']),
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
         if (name != null) 'name': name,
+        if (authenticatorName != null || authenticatorIcon != null)
+          'authenticator': {
+            if (authenticatorName != null) 'name': authenticatorName,
+            if (authenticatorIcon != null) 'icon': authenticatorIcon,
+          },
       };
 }
 

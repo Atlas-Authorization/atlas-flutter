@@ -116,13 +116,13 @@ void main() {
       transport.enqueue(200, '{"object":"session","id":"sess_1","status":"revoked"}');
       await makeClient().revokeSession('sess_1');
       expect(transport.pathAt(0), '/v1/client/sessions/sess_1/revoke');
-      expect(await store.load(), isNull);
+      expect(store.load(), isNull);
     });
 
     test('revokeSession of another device keeps this one signed in', () async {
       transport.enqueue(200, '{"object":"session","id":"sess_2","status":"revoked"}');
       await makeClient().revokeSession('sess_2');
-      expect(await store.load(), isNotNull);
+      expect(store.load(), isNotNull);
     });
 
     test('revokeOtherSessions returns the count', () async {

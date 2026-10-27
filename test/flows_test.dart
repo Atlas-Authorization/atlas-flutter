@@ -67,7 +67,7 @@ void main() {
       // Ticket exchanged and session persisted.
       expect(transport.pathAt(3), '/v1/client/tickets/exchange');
       expect(transport.bodyAt(3)['ticket'], 'tk_1');
-      final stored = await store.load();
+      final stored = store.load();
       expect(stored?.token, 'jwt_final');
       expect(stored?.refreshToken, 'rt_final');
     });
@@ -91,7 +91,7 @@ void main() {
       final done = await flow.attemptEmailCode('000111');
       expect(done, isA<FlowDone>());
       expect(transport.bodyAt(2)['code'], '000111');
-      expect((await store.load())?.token, 'jwt_final');
+      expect(store.load()?.token, 'jwt_final');
     });
 
     test('MFA enrollment yields backup codes and completes', () async {
@@ -117,7 +117,7 @@ void main() {
       expect(transport.bodyAt(3)['factor_id'], 'mf_1');
       expect(transport.bodyAt(3)['codes'], ['111222']);
       expect(flow.backupCodes, ['aaa', 'bbb']);
-      expect((await store.load())?.token, 'jwt_final');
+      expect(store.load()?.token, 'jwt_final');
     });
 
     test('prepareSecondFactor returns a typed SMS challenge without advancing',
@@ -169,7 +169,7 @@ void main() {
       final done = await flow.attemptVerification('424242');
       expect(done, isA<FlowDone>());
       expect(transport.pathAt(1), '/v1/client/sign_ups/su_1/attempt_verification');
-      expect((await store.load())?.token, 'jwt_final');
+      expect(store.load()?.token, 'jwt_final');
     });
   });
 
@@ -194,7 +194,7 @@ void main() {
       expect(s3, isA<FlowDone>());
       expect(transport.pathAt(2), '/v1/client/password_resets/pr_1/set_new_password');
       expect(transport.bodyAt(2)['password'], 'brandnewpass9');
-      expect((await store.load())?.token, 'jwt_final');
+      expect(store.load()?.token, 'jwt_final');
     });
 
     test('no ticket (sign-in-after-reset off) completes without a session',
@@ -208,7 +208,7 @@ void main() {
       final done = await flow.setNewPassword('brandnewpass9');
       expect(done, isA<FlowDone>());
       // No ticket → no session persisted; user signs in afresh.
-      expect(await store.load(), isNull);
+      expect(store.load(), isNull);
     });
   });
 
@@ -233,7 +233,7 @@ void main() {
       expect(transport.bodyAt(0)['nonce'], 'n0nce');
       expect(transport.pathAt(1), '/v1/client/tickets/exchange');
       expect(user.id, 'user_1');
-      expect((await store.load())?.token, 'jwt_final');
+      expect(store.load()?.token, 'jwt_final');
     });
 
     test('a non-complete id_token response throws with the status', () async {
