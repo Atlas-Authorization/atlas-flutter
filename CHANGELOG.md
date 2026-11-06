@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-11-06
+
+### Added
+
+- Device keys on Android and iOS (`AtlasDeviceKeyPlugin`), and device and app attestation (`attestation.dart`).
+- New client calls in `AtlasClient` for those flows.
+
 ## 0.11.0 — 2026-10-25
 
 ### Added
