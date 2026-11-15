@@ -29,6 +29,7 @@ export 'src/passkeys.dart';
 export 'src/policy_html.dart';
 export 'src/token_store.dart';
 export 'src/secure_token_store.dart';
+export 'src/step_up_factor_info.dart';
 export 'src/widgets/auth_state.dart';
 export 'src/widgets/design_style.dart';
 export 'src/widgets/management_widgets.dart';
