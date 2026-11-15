@@ -398,6 +398,43 @@ Only `unsafe_metadata` is client-writable on a user; `public_metadata` /
 `private_metadata` are rejected by the server (an organization's
 `public_metadata` is admin-writable via `updateOrganization`).
 
+## Organization switcher, billing, API keys and device approval
+
+Client calls (extension methods on `AtlasClient`):
+
+```dart
+// Organizations: list, create, switch (the new active org is in the session token)
+final orgs = await client.listOrganizationMemberships();
+await client.setActiveOrganization(orgs.first.organization.id); // null = personal account
+final active = await client.activeOrganizationId();
+
+// Billing: plans, subscription, hosted Checkout and Billing Portal
+final plans = await client.billingPlans();
+final checkout = await client.billingCheckout(planId: plans.first.id, successUrl: back, cancelUrl: back);
+final portal = await client.billingPortal(returnUrl: back);
+await client.billingCancel();
+
+// API keys: list, create (the secret is returned once), rename, revoke
+final created = await client.createApiKey(name: 'CI', expiresInSeconds: 86400);
+print(created.secret);
+await client.revokeApiKey(created.key.id);
+
+// Creating a key on a stale session throws STEP_UP_REQUIRED: re-authenticate, then retry
+await client.stepUp(strategy: 'password', password: password);
+```
+
+Widgets, themed from the instance's dashboard design exactly like `AtlasSignIn` (pass `appearance:` to override tokens in code):
+
+```dart
+AtlasOrganizationSwitcher(client: client)
+AtlasPricingTable(client: client, returnUrl: back, onOpenUrl: launchUrl)
+AtlasBillingOverview(client: client, returnUrl: back, onOpenUrl: launchUrl)
+AtlasApiKeys(client: client)
+AtlasDeviceApproval(client: client, userCode: scannedCode)
+```
+
+Each widget is backed by a controller you can use with your own UI: `AtlasOrganizationSwitcherController`, `AtlasBillingController`, `AtlasApiKeysController` and `AtlasDeviceApprovalController`. Billing hands `onOpenUrl` the provider's hosted page; there is no in-app card form.
+
 ## API surface
 
 `AtlasClient` (all methods return `Future`s):
