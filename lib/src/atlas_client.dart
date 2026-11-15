@@ -9,6 +9,7 @@ import 'attestation.dart';
 import 'design.dart';
 import 'device_key.dart';
 import 'models.dart';
+import 'oidc_claims.dart';
 import 'passkeys.dart';
 import 'policy_html.dart';
 import 'secure_token_store.dart';
@@ -16,6 +17,7 @@ import 'token_store.dart';
 
 part 'flows.dart';
 part 'integrations.dart';
+part 'management.dart';
 part 'policies.dart';
 
 /// Cookie names the server sets (mirrors the API's `COOKIE_NAMES`).

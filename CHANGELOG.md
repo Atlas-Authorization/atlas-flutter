@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0 — 2026-11-14
+
+### Added
+
+- **Billing.** `billingPlans`, `billingSubscription`, `billingInvoices`, `billingPaymentMethod`, `billingCheckout`, `billingPortal`, `billingChangePlan`, `billingCancel`, `billingRestore`, `billingCheck` and `billingValidateCoupon`, with `BillingPlan.priceView` for promotions, trials and yearly prices.
+- **API keys.** `listApiKeys`, `createApiKey`, `renameApiKey` and `revokeApiKey` for the user's keys or an organization's.
+- **Active organization and step-up.** `setActiveOrganization`, `activeOrganizationId` and `stepUp`.
+- **Step-up with a passkey or push.** `stepUpWithPasskey()` (the `passkeys` plugin), `beginPushStepUp()` and `stepUpPush()`.
+- **Widgets.** `AtlasOrganizationSwitcher`, `AtlasPricingTable`, `AtlasBillingOverview`, `AtlasApiKeys` and `AtlasDeviceApproval`, themed from the dashboard design like `AtlasSignIn`, with matching controllers for custom UI.
+
 ## 0.12.0 — 2026-11-06
 
 ### Added
